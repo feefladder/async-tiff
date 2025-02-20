@@ -59,14 +59,40 @@ impl COGReader {
 
 #[cfg(test)]
 mod test {
+    use std::io::BufReader;
+
     use super::*;
     use object_store::local::LocalFileSystem;
+    use tiff::decoder::{DecodingResult, Limits};
 
     #[tokio::test]
     async fn tmp() {
         let folder = "/Users/kyle/github/developmentseed/aiocogeo-rs/";
         let path = Path::parse("m_4007307_sw_18_060_20220803.tif").unwrap();
         let store = Arc::new(LocalFileSystem::new_with_prefix(folder).unwrap());
-        let _reader = COGReader::try_open(store, path).await.unwrap();
+        let reader = COGReader::try_open(store.clone(), path.clone())
+            .await
+            .unwrap();
+        let cursor = ObjectStoreCursor::new(store.clone(), path.clone());
+        let ifd = &reader.ifds.as_ref()[4];
+        dbg!(ifd.compression);
+        let tile = ifd.get_tile(0, 0, &cursor).await.unwrap();
+        std::fs::write("img.buf", tile).unwrap();
+        // dbg!(tile.len());
+    }
+
+    #[test]
+    fn tmp_tiff_example() {
+        let path =
+            "/Users/kyle/github/developmentseed/aiocogeo-rs/m_4007307_sw_18_060_20220803.tif";
+        let reader = std::fs::File::open(path).unwrap();
+        let mut decoder = tiff::decoder::Decoder::new(BufReader::new(reader))
+            .unwrap()
+            .with_limits(Limits::unlimited());
+        let result = decoder.read_image().unwrap();
+        match result {
+            DecodingResult::U8(content) => std::fs::write("img_from_tiff.buf", content).unwrap(),
+            _ => todo!(),
+        }
     }
 }
