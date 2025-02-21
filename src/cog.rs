@@ -65,9 +65,10 @@ mod test {
     use object_store::local::LocalFileSystem;
     use tiff::decoder::{DecodingResult, Limits};
 
+    #[ignore = "local file"]
     #[tokio::test]
     async fn tmp() {
-        let folder = "/Users/kyle/github/developmentseed/aiocogeo-rs/";
+        let folder = "/Users/kyle/github/developmentseed/async-tiff/";
         let path = object_store::path::Path::parse("m_4007307_sw_18_060_20220803.tif").unwrap();
         let store = Arc::new(LocalFileSystem::new_with_prefix(folder).unwrap());
         let reader = ObjectReader::new(store, path);
@@ -79,10 +80,10 @@ mod test {
         // dbg!(tile.len());
     }
 
+    #[ignore = "local file"]
     #[test]
     fn tmp_tiff_example() {
-        let path =
-            "/Users/kyle/github/developmentseed/aiocogeo-rs/m_4007307_sw_18_060_20220803.tif";
+        let path = "/Users/kyle/github/developmentseed/async-tiff/m_4007307_sw_18_060_20220803.tif";
         let reader = std::fs::File::open(path).unwrap();
         let mut decoder = tiff::decoder::Decoder::new(BufReader::new(reader))
             .unwrap()
