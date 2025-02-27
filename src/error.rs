@@ -22,7 +22,7 @@ pub enum AiocogeoError {
     ObjectStore(#[from] object_store::Error),
 
     #[error(transparent)]
-    TIFFError(#[from] tiff::TiffError),
+    InternalTIFFError(#[from] crate::tiff::TiffError),
 }
 
 /// Crate-specific result type.
