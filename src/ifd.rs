@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::io::{Cursor, Read};
+use std::io::Read;
 use std::ops::Range;
 
-use byteorder::{LittleEndian, ReadBytesExt};
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use num_enum::TryFromPrimitive;
 use tiff::decoder::ifd::Value;
 use tiff::tags::{
@@ -23,6 +22,7 @@ const DOCUMENT_NAME: u16 = 269;
 /// A collection of all the IFD
 // TODO: maybe separate out the primary/first image IFD out of the vec, as that one should have
 // geospatial metadata?
+#[derive(Debug)]
 pub struct ImageFileDirectories {
     /// There's always at least one IFD in a TIFF. We store this separately
     ifds: Vec<ImageFileDirectory>,
@@ -152,13 +152,13 @@ pub struct ImageFileDirectory {
     /// different from PaletteColor then next denotes the colorspace of the ColorMap entries.
     pub(crate) color_map: Option<Vec<u16>>,
 
-    pub(crate) tile_width: u32,
-    pub(crate) tile_height: u32,
+    pub(crate) tile_width: Option<u32>,
+    pub(crate) tile_height: Option<u32>,
 
-    pub(crate) tile_offsets: Vec<u32>,
-    pub(crate) tile_byte_counts: Vec<u32>,
+    pub(crate) tile_offsets: Option<Vec<u32>>,
+    pub(crate) tile_byte_counts: Option<Vec<u32>>,
 
-    pub(crate) extra_samples: Option<Vec<u8>>,
+    pub(crate) extra_samples: Option<Vec<u16>>,
 
     pub(crate) sample_format: Vec<SampleFormat>,
 
@@ -253,6 +253,7 @@ impl ImageFileDirectory {
         let mut other_tags = HashMap::new();
 
         tag_data.drain().try_for_each(|(tag, value)| {
+            dbg!(&tag);
             match tag {
                 Tag::NewSubfileType => new_subfile_type = Some(value.into_u32()?),
                 Tag::ImageWidth => image_width = Some(value.into_u32()?),
@@ -297,7 +298,7 @@ impl ImageFileDirectory {
                 Tag::TileLength => tile_height = Some(value.into_u32()?),
                 Tag::TileOffsets => tile_offsets = Some(value.into_u32_vec()?),
                 Tag::TileByteCounts => tile_byte_counts = Some(value.into_u32_vec()?),
-                Tag::ExtraSamples => extra_samples = Some(value.into_u8_vec()?),
+                Tag::ExtraSamples => extra_samples = Some(value.into_u16_vec()?),
                 Tag::SampleFormat => {
                     let values = value.into_u16_vec()?;
                     sample_format = Some(
@@ -343,7 +344,7 @@ impl ImageFileDirectory {
             let key_revision = header[1];
             assert_eq!(key_revision, 1);
 
-            // let key_minor_revision = header[2];
+            let _key_minor_revision = header[2];
             let number_of_keys = header[3];
 
             let mut tags = HashMap::with_capacity(number_of_keys as usize);
@@ -402,6 +403,16 @@ impl ImageFileDirectory {
             geo_key_directory = Some(GeoKeyDirectory::from_tags(tags)?);
         }
 
+        let samples_per_pixel = samples_per_pixel.expect("samples_per_pixel not found");
+        let planar_configuration = if let Some(planar_configuration) = planar_configuration {
+            planar_configuration
+        } else if samples_per_pixel == 1 {
+            // If SamplesPerPixel is 1, PlanarConfiguration is irrelevant, and need not be included.
+            // https://web.archive.org/web/20240329145253/https://www.awaresystems.be/imaging/tiff/tifftags/planarconfiguration.html
+            PlanarConfiguration::Chunky
+        } else {
+            panic!("planar_configuration not found and samples_per_pixel not 1")
+        };
         Ok(Self {
             new_subfile_type,
             image_width: image_width.expect("image_width not found"),
@@ -414,14 +425,14 @@ impl ImageFileDirectory {
             image_description,
             strip_offsets,
             orientation,
-            samples_per_pixel: samples_per_pixel.expect("samples_per_pixel not found"),
+            samples_per_pixel,
             rows_per_strip,
             strip_byte_counts,
             min_sample_value,
             max_sample_value,
             x_resolution,
             y_resolution,
-            planar_configuration: planar_configuration.expect("planar_configuration not found"),
+            planar_configuration,
             resolution_unit,
             software,
             date_time,
@@ -429,12 +440,15 @@ impl ImageFileDirectory {
             host_computer,
             predictor,
             color_map,
-            tile_width: tile_width.expect("tile_width not found"),
-            tile_height: tile_height.expect("tile_height not found"),
-            tile_offsets: tile_offsets.expect("tile_offsets not found"),
-            tile_byte_counts: tile_byte_counts.expect("tile_byte_counts not found"),
+            tile_width,
+            tile_height,
+            tile_offsets,
+            tile_byte_counts,
             extra_samples,
-            sample_format: sample_format.expect("sample_format not found"),
+            // Uint8 is the default for SampleFormat
+            // https://web.archive.org/web/20240329145340/https://www.awaresystems.be/imaging/tiff/tifftags/sampleformat.html
+            sample_format: sample_format
+                .unwrap_or(vec![SampleFormat::Uint; samples_per_pixel as _]),
             copyright,
             jpeg_tables,
             geo_key_directory,
@@ -570,21 +584,21 @@ impl ImageFileDirectory {
         self.predictor
     }
 
-    pub fn tile_width(&self) -> u32 {
+    pub fn tile_width(&self) -> Option<u32> {
         self.tile_width
     }
-    pub fn tile_height(&self) -> u32 {
+    pub fn tile_height(&self) -> Option<u32> {
         self.tile_height
     }
 
-    pub fn tile_offsets(&self) -> &[u32] {
-        &self.tile_offsets
+    pub fn tile_offsets(&self) -> Option<&[u32]> {
+        self.tile_offsets.as_deref()
     }
-    pub fn tile_byte_counts(&self) -> &[u32] {
-        &self.tile_byte_counts
+    pub fn tile_byte_counts(&self) -> Option<&[u32]> {
+        self.tile_byte_counts.as_deref()
     }
 
-    pub fn extra_samples(&self) -> Option<&[u8]> {
+    pub fn extra_samples(&self) -> Option<&[u16]> {
         self.extra_samples.as_deref()
     }
 
@@ -668,12 +682,14 @@ impl ImageFileDirectory {
         }
     }
 
-    fn get_tile_byte_range(&self, x: usize, y: usize) -> Range<u64> {
-        let idx = (y * self.tile_count().0) + x;
-        let offset = self.tile_offsets[idx] as usize;
+    fn get_tile_byte_range(&self, x: usize, y: usize) -> Option<Range<u64>> {
+        let tile_offsets = self.tile_offsets.as_deref()?;
+        let tile_byte_counts = self.tile_byte_counts.as_deref()?;
+        let idx = (y * self.tile_count()?.0) + x;
+        let offset = tile_offsets[idx] as usize;
         // TODO: aiocogeo has a -1 here, but I think that was in error
-        let byte_count = self.tile_byte_counts[idx] as usize;
-        offset as _..(offset + byte_count) as _
+        let byte_count = tile_byte_counts[idx] as usize;
+        Some(offset as _..(offset + byte_count) as _)
     }
 
     pub async fn get_tile(
@@ -683,7 +699,9 @@ impl ImageFileDirectory {
         mut reader: Box<dyn AsyncFileReader>,
         decoder_registry: &DecoderRegistry,
     ) -> Result<Bytes> {
-        let range = self.get_tile_byte_range(x, y);
+        let range = self
+            .get_tile_byte_range(x, y)
+            .ok_or(AiocogeoError::General("Not a tiled TIFF".to_string()))?;
         let buf = reader.get_bytes(range).await?;
         decode_tile(
             buf,
@@ -704,11 +722,14 @@ impl ImageFileDirectory {
         assert_eq!(x.len(), y.len(), "x and y should have same len");
 
         // 1: Get all the byte ranges for all tiles
-        let byte_ranges: Vec<_> = x
+        let byte_ranges = x
             .iter()
             .zip(y)
-            .map(|(x, y)| self.get_tile_byte_range(*x, *y))
-            .collect();
+            .map(|(x, y)| {
+                self.get_tile_byte_range(*x, *y)
+                    .ok_or(AiocogeoError::General("Not a tiled TIFF".to_string()))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // 2: Fetch using `get_ranges
         let buffers = reader.get_byte_ranges(byte_ranges).await?;
@@ -729,10 +750,11 @@ impl ImageFileDirectory {
     }
 
     /// Return the number of x/y tiles in the IFD
-    pub fn tile_count(&self) -> (usize, usize) {
-        let x_count = (self.image_width as f64 / self.tile_width as f64).ceil();
-        let y_count = (self.image_height as f64 / self.tile_height as f64).ceil();
-        (x_count as usize, y_count as usize)
+    /// Returns `None` if this is not a tiled TIFF
+    pub fn tile_count(&self) -> Option<(usize, usize)> {
+        let x_count = (self.image_width as f64 / self.tile_width? as f64).ceil();
+        let y_count = (self.image_height as f64 / self.tile_height? as f64).ceil();
+        Some((x_count as usize, y_count as usize))
     }
 
     /// Return the geotransform of the image
@@ -828,19 +850,19 @@ async fn read_tag_value(
         // NOTE: we should only be reading value_byte_length when it's 4 bytes or fewer. Right now
         // we're reading even if it's 8 bytes, but then only using the first 4 bytes of this
         // buffer.
-        let data = cursor.read(value_byte_length).await?;
+        let mut data = cursor.read(value_byte_length).await?;
 
         // 2b: the value is at most 4 bytes or doesn't fit in the offset field.
         return Ok(match tag_type {
-            Type::BYTE | Type::UNDEFINED => Value::Byte(data.reader().read_u8()?),
-            Type::SBYTE => Value::Signed(data.reader().read_i8()? as i32),
-            Type::SHORT => Value::Short(data.reader().read_u16::<LittleEndian>()?),
-            Type::SSHORT => Value::Signed(data.reader().read_i16::<LittleEndian>()? as i32),
-            Type::LONG => Value::Unsigned(data.reader().read_u32::<LittleEndian>()?),
-            Type::SLONG => Value::Signed(data.reader().read_i32::<LittleEndian>()?),
-            Type::FLOAT => Value::Float(data.reader().read_f32::<LittleEndian>()?),
+            Type::BYTE | Type::UNDEFINED => Value::Byte(data.read_u8()?),
+            Type::SBYTE => Value::Signed(data.read_i8()? as i32),
+            Type::SHORT => Value::Short(data.read_u16()?),
+            Type::SSHORT => Value::Signed(data.read_i16()? as i32),
+            Type::LONG => Value::Unsigned(data.read_u32()?),
+            Type::SLONG => Value::Signed(data.read_i32()?),
+            Type::FLOAT => Value::Float(data.read_f32()?),
             Type::ASCII => {
-                if data[0] == 0 {
+                if data.as_ref()[0] == 0 {
                     Value::Ascii("".to_string())
                 } else {
                     panic!("Invalid tag");
@@ -848,37 +870,37 @@ async fn read_tag_value(
                 }
             }
             Type::LONG8 => {
-                let offset = data.reader().read_u32::<LittleEndian>()?;
+                let offset = data.read_u32()?;
                 cursor.seek(offset as usize);
                 Value::UnsignedBig(cursor.read_u64().await?)
             }
             Type::SLONG8 => {
-                let offset = data.reader().read_u32::<LittleEndian>()?;
+                let offset = data.read_u32()?;
                 cursor.seek(offset as usize);
                 Value::SignedBig(cursor.read_i64().await?)
             }
             Type::DOUBLE => {
-                let offset = data.reader().read_u32::<LittleEndian>()?;
+                let offset = data.read_u32()?;
                 cursor.seek(offset as usize);
                 Value::Double(cursor.read_f64().await?)
             }
             Type::RATIONAL => {
-                let offset = data.reader().read_u32::<LittleEndian>()?;
+                let offset = data.read_u32()?;
                 cursor.seek(offset as usize);
                 let numerator = cursor.read_u32().await?;
                 let denominator = cursor.read_u32().await?;
                 Value::Rational(numerator, denominator)
             }
             Type::SRATIONAL => {
-                let offset = data.reader().read_u32::<LittleEndian>()?;
+                let offset = data.read_u32()?;
                 cursor.seek(offset as usize);
                 let numerator = cursor.read_i32().await?;
                 let denominator = cursor.read_i32().await?;
                 Value::SRational(numerator, denominator)
             }
-            Type::IFD => Value::Ifd(data.reader().read_u32::<LittleEndian>()?),
+            Type::IFD => Value::Ifd(data.read_u32()?),
             Type::IFD8 => {
-                let offset = data.reader().read_u32::<LittleEndian>()?;
+                let offset = data.read_u32()?;
                 cursor.seek(offset as usize);
                 Value::IfdBig(cursor.read_u64().await?)
             }
@@ -888,33 +910,31 @@ async fn read_tag_value(
 
     // Case 3: There is more than one value, but it fits in the offset field.
     if value_byte_length <= 4 {
-        let data = cursor.read(value_byte_length).await?;
+        let mut data = cursor.read(value_byte_length).await?;
         cursor.advance(4 - value_byte_length);
 
         match tag_type {
             Type::BYTE | Type::UNDEFINED => {
                 return {
-                    let mut data_cursor = Cursor::new(data);
                     Ok(Value::List(
                         (0..count)
-                            .map(|_| Value::Byte(data_cursor.read_u8().unwrap()))
+                            .map(|_| Value::Byte(data.read_u8().unwrap()))
                             .collect(),
                     ))
-                }
+                };
             }
             Type::SBYTE => {
                 return {
-                    let mut data_cursor = Cursor::new(data);
                     Ok(Value::List(
                         (0..count)
-                            .map(|_| Value::Signed(data_cursor.read_i8().unwrap() as i32))
+                            .map(|_| Value::Signed(data.read_i8().unwrap() as i32))
                             .collect(),
                     ))
                 }
             }
             Type::ASCII => {
                 let mut buf = vec![0; count];
-                data.reader().read_exact(&mut buf)?;
+                data.read_exact(&mut buf)?;
                 if buf.is_ascii() && buf.ends_with(&[0]) {
                     let v = std::str::from_utf8(&buf)
                         .map_err(|err| AiocogeoError::General(err.to_string()))?;
@@ -926,50 +946,44 @@ async fn read_tag_value(
                 }
             }
             Type::SHORT => {
-                let mut reader = data.reader();
                 let mut v = Vec::new();
                 for _ in 0..count {
-                    v.push(Value::Short(reader.read_u16::<LittleEndian>()?));
+                    v.push(Value::Short(data.read_u16()?));
                 }
                 return Ok(Value::List(v));
             }
             Type::SSHORT => {
-                let mut reader = data.reader();
                 let mut v = Vec::new();
                 for _ in 0..count {
-                    v.push(Value::Signed(i32::from(reader.read_i16::<LittleEndian>()?)));
+                    v.push(Value::Signed(i32::from(data.read_i16()?)));
                 }
                 return Ok(Value::List(v));
             }
             Type::LONG => {
-                let mut reader = data.reader();
                 let mut v = Vec::new();
                 for _ in 0..count {
-                    v.push(Value::Unsigned(reader.read_u32::<LittleEndian>()?));
+                    v.push(Value::Unsigned(data.read_u32()?));
                 }
                 return Ok(Value::List(v));
             }
             Type::SLONG => {
-                let mut reader = data.reader();
                 let mut v = Vec::new();
                 for _ in 0..count {
-                    v.push(Value::Signed(reader.read_i32::<LittleEndian>()?));
+                    v.push(Value::Signed(data.read_i32()?));
                 }
                 return Ok(Value::List(v));
             }
             Type::FLOAT => {
-                let mut reader = data.reader();
                 let mut v = Vec::new();
                 for _ in 0..count {
-                    v.push(Value::Float(reader.read_f32::<LittleEndian>()?));
+                    v.push(Value::Float(data.read_f32()?));
                 }
                 return Ok(Value::List(v));
             }
             Type::IFD => {
-                let mut reader = data.reader();
                 let mut v = Vec::new();
                 for _ in 0..count {
-                    v.push(Value::Ifd(reader.read_u32::<LittleEndian>()?));
+                    v.push(Value::Ifd(data.read_u32()?));
                 }
                 return Ok(Value::List(v));
             }
@@ -1100,8 +1114,8 @@ async fn read_tag_value(
         Type::ASCII => {
             let n = count;
             let mut out = vec![0; n];
-            let buf = cursor.read(n).await?;
-            buf.reader().read_exact(&mut out)?;
+            let mut buf = cursor.read(n).await?;
+            buf.read_exact(&mut out)?;
 
             // Strings may be null-terminated, so we trim anything downstream of the null byte
             if let Some(first) = out.iter().position(|&b| b == 0) {
