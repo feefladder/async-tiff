@@ -52,6 +52,18 @@ pub trait AsyncFileReader: Debug + Send + Sync {
         }
         .boxed()
     }
+
+    /// Same as [`get_bytes`], but this function is called when retrieving
+    /// compressed tile data
+    fn get_tile_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        self.get_bytes(range)
+    }
+
+    /// Same as [`get_byte_ranges`], but this function is only called when retrieving
+    /// compressed tile data
+    fn get_tile_byte_ranges(&self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, AsyncTiffResult<Vec<Bytes>>> {
+        self.get_byte_ranges(ranges)
+    }
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
