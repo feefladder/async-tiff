@@ -11,6 +11,13 @@ mod ifd;
 pub mod tiff;
 mod tile;
 
+#[cfg(not(feature = "object_store"))]
+mod object_store;
+#[cfg(feature = "object_store")]
+pub use object_store::coalesce_ranges;
+#[cfg(not(feature = "object_store"))]
+pub use object_store::util::coalesce_ranges;
+
 pub use cog::TIFF;
 pub use ifd::{ImageFileDirectories, ImageFileDirectory};
 pub use tile::Tile;
