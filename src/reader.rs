@@ -12,8 +12,6 @@ use futures::future::{BoxFuture, FutureExt, TryFutureExt};
 #[cfg(feature = "object_store")]
 use object_store::ObjectStore;
 
-use crate::coalesce_ranges;
-
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 
 /// The asynchronous interface used to read COG files
@@ -36,10 +34,8 @@ pub trait AsyncFileReader: Debug + Send + Sync {
     /// Retrieve the bytes in `range`
     fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>>;
 
-    /// Retrieve multiple byte ranges. The default implementation will
-    /// coalesce ranges with:
-    /// - less than 1024*1024=1MB space in between
-    /// - 10 parallel requests
+    /// Retrieve multiple byte ranges. The default implementation will call `get_bytes`
+    /// sequentially
     fn get_byte_ranges(
         &self,
         ranges: Vec<Range<u64>>,
@@ -47,8 +43,8 @@ pub trait AsyncFileReader: Debug + Send + Sync {
         async move {
             let mut result = Vec::with_capacity(ranges.len());
 
-            for data in coalesce_ranges(&ranges, |range| self.get_bytes(range), 1024 * 1024).await?
-            {
+            for range in ranges.into_iter() {
+                let data = self.get_bytes(range).await?;
                 result.push(data);
             }
 
