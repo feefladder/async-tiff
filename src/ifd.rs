@@ -7,7 +7,7 @@ use num_enum::TryFromPrimitive;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::geo::{GeoKeyDirectory, GeoKeyTag};
-use crate::reader::{AsyncCursor, AsyncFileReader};
+use crate::reader::{AsyncCursor, AsyncFileReader, Endianness};
 use crate::tiff::tags::{
     CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, ResolutionUnit,
     SampleFormat, Tag, Type,
@@ -56,7 +56,80 @@ impl ImageFileDirectories {
             ifds.push(ifd);
         }
 
-        Ok(Self { ifds })
+        let res = Self { ifds };
+        Ok(res.fetch_tile_arrays(cursor).await?)
+    }
+
+    /// Fetch tile arrays. In COGs, these are not interleaved with the IFDs and
+    /// don't normally fit in the header.
+    pub(crate) async fn fetch_tile_arrays(mut self, cursor: &AsyncCursor) -> AsyncTiffResult<Self> {
+        let mut tile_array = Vec::with_capacity(self.ifds.len() * 2);
+        let mut idxs = Vec::with_capacity(self.ifds.len());
+        for (idx, ifd) in self.ifds.iter().enumerate() {
+            match (&ifd.tile_offsets, &ifd.tile_byte_counts) {
+                (
+                    Some(OffsetOrT::Offset {
+                        tag_type: to_tt,
+                        count: to_c,
+                        offset: to_o,
+                    }),
+                    Some(OffsetOrT::Offset {
+                        tag_type: bc_tt,
+                        count: bc_c,
+                        offset: bc_o,
+                    }),
+                ) => {
+                    tile_array.push(*to_o..to_tt.tag_size() * to_c);
+                    tile_array.push(*bc_o..bc_tt.tag_size() * bc_c);
+                    idxs.push(idx);
+                }
+                _ => {}
+            }
+        }
+        let tile_data = cursor.reader().get_byte_ranges(tile_array).await?;
+
+        for (data, idx) in tile_data.chunks_exact(2).zip(idxs) {
+            self.ifds[idx].tile_offsets = Some(OffsetOrT::T(
+                data[0]
+                    .chunks_exact(8)
+                    .map(|chunk| match cursor.endianness() {
+                        Endianness::BigEndian => u64::from_be_bytes(chunk.try_into().unwrap()),
+                        Endianness::LittleEndian => u64::from_le_bytes(chunk.try_into().unwrap()),
+                    })
+                    .collect(),
+            ));
+            self.ifds[idx].tile_byte_counts = Some(OffsetOrT::T(
+                data[1]
+                    .chunks_exact(8)
+                    .map(|chunk| match cursor.endianness() {
+                        Endianness::BigEndian => u64::from_be_bytes(chunk.try_into().unwrap()),
+                        Endianness::LittleEndian => u64::from_le_bytes(chunk.try_into().unwrap()),
+                    })
+                    .collect(),
+            ));
+        }
+        Ok(self)
+    }
+}
+
+/// enum for special-casing tags that are not interleaved with IFDs in COG
+#[derive(Debug, Clone)]
+pub enum OffsetOrT<T> {
+    Offset {
+        tag_type: Type,
+        count: u64,
+        offset: u64,
+    },
+    T(T),
+}
+
+impl<T> OffsetOrT<T> {
+    /// Expect method to extract the value of `T`
+    pub fn expect(self, msg: &str) -> T {
+        match self {
+            OffsetOrT::T(v) => v,
+            _ => panic!("{}", msg),
+        }
     }
 }
 
@@ -163,8 +236,8 @@ pub struct ImageFileDirectory {
     pub(crate) tile_width: Option<u32>,
     pub(crate) tile_height: Option<u32>,
 
-    pub(crate) tile_offsets: Option<Vec<u64>>,
-    pub(crate) tile_byte_counts: Option<Vec<u64>>,
+    pub(crate) tile_offsets: Option<OffsetOrT<Vec<u64>>>,
+    pub(crate) tile_byte_counts: Option<OffsetOrT<Vec<u64>>>,
 
     pub(crate) extra_samples: Option<Vec<u16>>,
 
@@ -202,9 +275,44 @@ impl ImageFileDirectory {
             cursor.read_u16().await?.into()
         };
         let mut tags = HashMap::with_capacity(tag_count as usize);
+        let mut tile_offsets = None;
+        let mut tile_byte_counts = None;
         for _ in 0..tag_count {
             let (tag_name, tag_value) = read_tag(cursor, bigtiff).await?;
-            tags.insert(tag_name, tag_value);
+            match tag_name {
+                Tag::TileOffsets => {
+                    tile_offsets = match tag_value {
+                        OffsetOrT::Offset {
+                            tag_type,
+                            count,
+                            offset,
+                        } => Some(OffsetOrT::Offset {
+                            tag_type,
+                            count,
+                            offset,
+                        }),
+                        OffsetOrT::T(t) => Some(OffsetOrT::T(t.into_u64_vec()?)),
+                    };
+                }
+                Tag::TileByteCounts => {
+                    tile_byte_counts = match tag_value {
+                        OffsetOrT::Offset {
+                            tag_type,
+                            count,
+                            offset,
+                        } => Some(OffsetOrT::Offset {
+                            tag_type,
+                            count,
+                            offset,
+                        }),
+                        OffsetOrT::T(t) => Some(OffsetOrT::T(t.into_u64_vec()?)),
+                    };
+                }
+                // the default
+                tname => {
+                    tags.insert(tname, tag_value.expect("Should be initialized"));
+                }
+            }
         }
 
         // Tag   2 bytes
@@ -235,7 +343,10 @@ impl ImageFileDirectory {
             Some(next_ifd_offset)
         };
 
-        Self::from_tags(tags, next_ifd_offset)
+        let mut res = Self::from_tags(tags, next_ifd_offset)?;
+        res.tile_offsets = tile_offsets;
+        res.tile_byte_counts = tile_byte_counts;
+        Ok(res)
     }
 
     fn next_ifd_offset(&self) -> Option<u64> {
@@ -330,8 +441,8 @@ impl ImageFileDirectory {
                 Tag::ColorMap => color_map = Some(value.into_u16_vec()?),
                 Tag::TileWidth => tile_width = Some(value.into_u32()?),
                 Tag::TileLength => tile_height = Some(value.into_u32()?),
-                Tag::TileOffsets => tile_offsets = Some(value.into_u64_vec()?),
-                Tag::TileByteCounts => tile_byte_counts = Some(value.into_u64_vec()?),
+                Tag::TileOffsets => tile_offsets = Some(OffsetOrT::T(value.into_u64_vec()?)),
+                Tag::TileByteCounts => tile_byte_counts = Some(OffsetOrT::T(value.into_u64_vec()?)),
                 Tag::ExtraSamples => extra_samples = Some(value.into_u16_vec()?),
                 Tag::SampleFormat => {
                     let values = value.into_u16_vec()?;
@@ -676,13 +787,25 @@ impl ImageFileDirectory {
     /// For each tile, the byte offset of that tile, as compressed and stored on disk.
     /// <https://web.archive.org/web/20240329145250/https://www.awaresystems.be/imaging/tiff/tifftags/tileoffsets.html>
     pub fn tile_offsets(&self) -> Option<&[u64]> {
-        self.tile_offsets.as_deref()
+        match &self.tile_offsets {
+            Some(v) => match v {
+                OffsetOrT::T(v) => Some(v.as_slice()),
+                _ => None,
+            },
+            None => None,
+        }
     }
 
     /// For each tile, the number of (compressed) bytes in that tile.
     /// <https://web.archive.org/web/20240329145339/https://www.awaresystems.be/imaging/tiff/tifftags/tilebytecounts.html>
     pub fn tile_byte_counts(&self) -> Option<&[u64]> {
-        self.tile_byte_counts.as_deref()
+        match &self.tile_byte_counts {
+            Some(v) => match v {
+                OffsetOrT::T(v) => Some(v.as_slice()),
+                _ => None,
+            },
+            None => None,
+        }
     }
 
     /// Description of extra components.
@@ -766,8 +889,8 @@ impl ImageFileDirectory {
     }
 
     fn get_tile_byte_range(&self, x: usize, y: usize) -> Option<Range<u64>> {
-        let tile_offsets = self.tile_offsets.as_deref()?;
-        let tile_byte_counts = self.tile_byte_counts.as_deref()?;
+        let tile_offsets = self.tile_offsets()?;
+        let tile_byte_counts = self.tile_byte_counts()?;
         let idx = (y * self.tile_count()?.0) + x;
         let offset = tile_offsets[idx] as usize;
         // TODO: aiocogeo has a -1 here, but I think that was in error
@@ -844,7 +967,10 @@ impl ImageFileDirectory {
 }
 
 /// Read a single tag from the cursor
-async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(Tag, Value)> {
+async fn read_tag(
+    cursor: &mut AsyncCursor,
+    bigtiff: bool,
+) -> AsyncTiffResult<(Tag, OffsetOrT<Value>)> {
     let start_cursor_position = cursor.position();
 
     let tag_name = Tag::from_u16_exhaustive(cursor.read_u16().await?);
@@ -859,13 +985,30 @@ async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(T
         cursor.read_u32().await?.into()
     };
 
+    // special-case TileOffsets and TileByteCounts
+    if tag_name == Tag::TileOffsets || tag_name == Tag::TileByteCounts {
+        let offset = if bigtiff {
+            cursor.read_u64().await?
+        } else {
+            cursor.read_u32().await?.into()
+        };
+        return Ok((
+            tag_name,
+            OffsetOrT::Offset {
+                tag_type,
+                count,
+                offset,
+            },
+        ));
+    }
+
     let tag_value = read_tag_value(cursor, tag_type, count, bigtiff).await?;
 
     // TODO: better handle management of cursor state
     let ifd_entry_size = if bigtiff { 20 } else { 12 };
     cursor.seek(start_cursor_position + ifd_entry_size);
 
-    Ok((tag_name, tag_value))
+    Ok((tag_name, OffsetOrT::T(tag_value)))
 }
 
 /// Read a tag's value from the cursor
@@ -884,17 +1027,7 @@ async fn read_tag_value(
         return Ok(Value::List(vec![]));
     }
 
-    let tag_size = match tag_type {
-        Type::BYTE | Type::SBYTE | Type::ASCII | Type::UNDEFINED => 1,
-        Type::SHORT | Type::SSHORT => 2,
-        Type::LONG | Type::SLONG | Type::FLOAT | Type::IFD => 4,
-        Type::LONG8
-        | Type::SLONG8
-        | Type::DOUBLE
-        | Type::RATIONAL
-        | Type::SRATIONAL
-        | Type::IFD8 => 8,
-    };
+    let tag_size = tag_type.tag_size();
 
     let value_byte_length = count.checked_mul(tag_size).unwrap();
 
