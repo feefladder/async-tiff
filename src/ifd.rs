@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::ops::Range;
 
@@ -42,9 +42,15 @@ impl ImageFileDirectories {
         bigtiff: bool,
     ) -> AsyncTiffResult<Self> {
         let mut next_ifd_offset = Some(ifd_offset);
+        let mut seen_ifds = HashSet::new(); // loop prevention
 
         let mut ifds = vec![];
         while let Some(offset) = next_ifd_offset {
+            if seen_ifds.contains(&offset) {
+                break;
+            } // loop prevention. TODO: add this to IFDs?
+            seen_ifds.insert(offset);
+
             let ifd = ImageFileDirectory::read(cursor, offset, bigtiff).await?;
             next_ifd_offset = ifd.next_ifd_offset();
             ifds.push(ifd);
