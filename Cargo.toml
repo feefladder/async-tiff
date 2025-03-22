@@ -28,6 +28,6 @@ tiff = "0.9.1"
 tokio = { version = "1.9", features = ["macros", "fs", "rt-multi-thread"] }
 
 [features]
-default = ["object_store"]
+default = ["object_store", "reqwest"]
 reqwest = ["dep:reqwest"]
-object_store = ["dep:object_store", "reqwest"]
+object_store = ["dep:object_store"]
