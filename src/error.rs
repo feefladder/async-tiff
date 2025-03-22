@@ -33,7 +33,7 @@ pub enum AsyncTiffError {
     InternalTIFFError(#[from] crate::tiff::TiffError),
 
     /// Reqwest error
-    #[cfg(feature = "reqwest")] // see https://www.reddit.com/r/rust/comments/xyik51/comment/irhei39/
+    #[cfg(feature = "reqwest")]
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
 
