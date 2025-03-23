@@ -349,6 +349,9 @@ pub(crate) struct EndianAwareReader {
 }
 
 impl EndianAwareReader {
+    pub(crate) fn new(reader: Reader<Bytes>, endianness: Endianness) -> Self {
+        Self { reader, endianness }
+    }
     /// Read a u8 from the cursor, advancing the internal state by 1 byte.
     pub(crate) fn read_u8(&mut self) -> AsyncTiffResult<u8> {
         Ok(self.reader.read_u8()?)

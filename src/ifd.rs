@@ -7,7 +7,7 @@ use num_enum::TryFromPrimitive;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::geo::{GeoKeyDirectory, GeoKeyTag};
-use crate::reader::{AsyncCursor, AsyncFileReader};
+use crate::reader::{AsyncCursor, AsyncFileReader, EndianAwareReader};
 use crate::tiff::tags::{
     CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, ResolutionUnit,
     SampleFormat, Tag, Type,
@@ -839,7 +839,7 @@ impl ImageFileDirectory {
 
 /// Read a single tag from the cursor
 async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(Tag, Value)> {
-    let start_cursor_position = cursor.position();
+    // let start_cursor_position = cursor.position();
 
     let tag_name = Tag::from_u16_exhaustive(cursor.read_u16().await?);
 
@@ -855,9 +855,9 @@ async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(T
 
     let tag_value = read_tag_value(cursor, tag_type, count, bigtiff).await?;
 
-    // TODO: better handle management of cursor state
-    let ifd_entry_size = if bigtiff { 20 } else { 12 };
-    cursor.seek(start_cursor_position + ifd_entry_size);
+    // TODO: better handle management of cursor state <- should be done now
+    // let ifd_entry_size = if bigtiff { 20 } else { 12 };
+    // cursor.seek(start_cursor_position + ifd_entry_size);
 
     Ok((tag_name, tag_value))
 }
@@ -885,7 +885,13 @@ async fn read_tag_value(
     // prefetch all tag data
     let mut data = if (bigtiff && value_byte_length <= 8) || value_byte_length <= 4 {
         // value fits in offset field
-        cursor.read(value_byte_length).await?
+        let res = cursor.read(value_byte_length).await?;
+        if bigtiff {
+            cursor.advance(8-value_byte_length);
+        } else {
+            cursor.advance(4-value_byte_length);
+        }
+        res
     } else {
         // Seek cursor
         let offset = if bigtiff {
@@ -893,8 +899,10 @@ async fn read_tag_value(
         } else {
             cursor.read_u32().await?.into()
         };
-        cursor.seek(offset);
-        cursor.read(value_byte_length).await?
+        let reader = cursor.reader().get_bytes(offset..offset+value_byte_length).await?.reader();
+        EndianAwareReader::new(reader, cursor.endianness())
+        // cursor.seek(offset);
+        // cursor.read(value_byte_length).await?
     };
     // Case 2: there is one value.
     if count == 1 {
