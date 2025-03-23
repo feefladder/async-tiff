@@ -1,7 +1,7 @@
 //! Abstractions for network reading.
 
 use std::fmt::Debug;
-use std::io::{Read, Seek};
+use std::io::Read;
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -70,43 +70,27 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     }
 }
 
-impl AsyncFileReader for std::fs::File {
+#[cfg(feature = "tokio")]
+impl AsyncFileReader for tokio::fs::File {
     fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
         async move {
-            let mut file = self.try_clone()?;
-            file.seek(std::io::SeekFrom::Start(range.start))?;
-            let len = (range.end - range.start) as usize;
-            let mut buf = vec![0u8; len];
-            file.read_exact(&mut buf)?;
-            let res = Bytes::copy_from_slice(&buf);
-            Ok(res)
+            let mut file = (*self).try_clone().await?;
+            file.seek(std::io::SeekFrom::Start(range.start)).await?;
+
+            let to_read = (range.end - range.start).try_into().unwrap();
+            let mut buffer = Vec::with_capacity(to_read);
+            let read = file.take(to_read as u64).read_to_end(&mut buffer).await?;
+            if read != to_read {
+                return Err(AsyncTiffError::EndOfFile(to_read, read));
+            }
+
+            Ok(buffer.into())
         }
         .boxed()
     }
 }
-
-// #[cfg(feature = "tokio")]
-// impl<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Debug + Send + Sync> AsyncFileReader
-//     for T
-// {
-//     fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
-//         use tokio::io::{AsyncReadExt, AsyncSeekExt};
-
-//         async move {
-//             self.seek(std::io::SeekFrom::Start(range.start)).await?;
-
-//             let to_read = (range.end - range.start).try_into().unwrap();
-//             let mut buffer = Vec::with_capacity(to_read);
-//             let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
-//             if read != to_read {
-//                 return Err(AsyncTiffError::EndOfFile(to_read, read));
-//             }
-
-//             Ok(buffer.into())
-//         }
-//         .boxed()
-//     }
-// }
 
 /// An AsyncFileReader that reads from an [`ObjectStore`] instance.
 #[cfg(feature = "object_store")]

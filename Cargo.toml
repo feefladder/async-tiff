@@ -25,10 +25,11 @@ weezl = "0.1.0"
 
 [dev-dependencies]
 tiff = "0.9.1"
-tokio = { version = "1.9", features = ["macros", "fs", "rt-multi-thread"] }
+tokio = { version = "1.9", features = ["macros", "fs", "rt-multi-thread", "io-util"] }
 
 [features]
-default = ["object_store", "reqwest"]
+default = ["object_store", "reqwest", "tokio"]
+tokio = ["dep:tokio"]
 reqwest = ["dep:reqwest"]
 object_store = ["dep:object_store"]
 
