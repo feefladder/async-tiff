@@ -887,9 +887,9 @@ async fn read_tag_value(
         // value fits in offset field
         let res = cursor.read(value_byte_length).await?;
         if bigtiff {
-            cursor.advance(8-value_byte_length);
+            cursor.advance(8 - value_byte_length);
         } else {
-            cursor.advance(4-value_byte_length);
+            cursor.advance(4 - value_byte_length);
         }
         res
     } else {
@@ -899,7 +899,11 @@ async fn read_tag_value(
         } else {
             cursor.read_u32().await?.into()
         };
-        let reader = cursor.reader().get_bytes(offset..offset+value_byte_length).await?.reader();
+        let reader = cursor
+            .reader()
+            .get_bytes(offset..offset + value_byte_length)
+            .await?
+            .reader();
         EndianAwareReader::new(reader, cursor.endianness())
         // cursor.seek(offset);
         // cursor.read(value_byte_length).await?
@@ -934,18 +938,18 @@ async fn read_tag_value(
 
     match tag_type {
         Type::BYTE | Type::UNDEFINED => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Byte(data.read_u8()?));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::SBYTE => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::SignedByte(data.read_i8()?));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::ASCII => {
             let mut buf = vec![0; count as usize];
@@ -954,95 +958,95 @@ async fn read_tag_value(
                 let v = std::str::from_utf8(&buf)
                     .map_err(|err| AsyncTiffError::General(err.to_string()))?;
                 let v = v.trim_matches(char::from(0));
-                return Ok(Value::Ascii(v.into()));
+                Ok(Value::Ascii(v.into()))
             } else {
                 panic!("Invalid tag");
                 // return Err(TiffError::FormatError(TiffFormatError::InvalidTag));
             }
         }
         Type::SHORT => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Short(data.read_u16()?));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::SSHORT => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Signed(i32::from(data.read_i16()?)));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::LONG => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Unsigned(data.read_u32()?));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::SLONG => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Signed(data.read_i32()?));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::FLOAT => {
-            let mut v = Vec::new();
+            let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Float(data.read_f32()?));
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::DOUBLE => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Double(data.read_f64()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::RATIONAL => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Rational(data.read_u32()?, data.read_u32()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::SRATIONAL => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::SRational(data.read_i32()?, data.read_i32()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::LONG8 => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::UnsignedBig(data.read_u64()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::SLONG8 => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::SignedBig(data.read_i64()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::IFD => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::Ifd(data.read_u32()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
         Type::IFD8 => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
                 v.push(Value::IfdBig(data.read_u64()?))
             }
-            return Ok(Value::List(v));
+            Ok(Value::List(v))
         }
     }
 }
