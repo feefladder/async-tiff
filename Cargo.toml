@@ -33,9 +33,8 @@ reqwest = ["dep:reqwest"]
 object_store = ["dep:object_store"]
 
 [package.metadata.cargo-all-features]
-
 # If your crate has a large number of optional dependencies, skip them for speed
-skip_optional_dependencies = true
+# skip_optional_dependencies = true
 
 # Exclude certain features from the build matrix
 denylist = ["default"]

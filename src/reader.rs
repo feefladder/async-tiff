@@ -1,14 +1,16 @@
 //! Abstractions for network reading.
 
 use std::fmt::Debug;
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::ops::Range;
 use std::sync::Arc;
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
-use futures::future::{BoxFuture, FutureExt, TryFutureExt};
+use futures::future::{BoxFuture, FutureExt};
+#[cfg(feature = "object_store")]
+use futures::TryFutureExt;
 #[cfg(feature = "object_store")]
 use object_store::ObjectStore;
 
@@ -65,6 +67,21 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
         ranges: Vec<Range<u64>>,
     ) -> BoxFuture<'_, AsyncTiffResult<Vec<Bytes>>> {
         self.as_ref().get_byte_ranges(ranges)
+    }
+}
+
+impl AsyncFileReader for std::fs::File {
+    fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        async move {
+            let mut file = self.try_clone()?;
+            file.seek(std::io::SeekFrom::Start(range.start))?;
+            let len = (range.end - range.start) as usize;
+            let mut buf = vec![0u8; len];
+            file.read_exact(&mut buf)?;
+            let res = Bytes::copy_from_slice(&buf);
+            Ok(res)
+        }
+        .boxed()
     }
 }
 
