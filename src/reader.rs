@@ -332,11 +332,13 @@ impl AsyncCursor {
         &self.reader
     }
 
+    #[allow(dead_code)]
     pub(crate) fn endianness(&self) -> Endianness {
         self.endianness
     }
 
     /// Advance cursor position by a set amount
+    #[allow(dead_code)]
     pub(crate) fn advance(&mut self, amount: u64) {
         self.offset += amount;
     }
@@ -360,6 +362,20 @@ impl EndianAwareReader {
     pub(crate) fn new(reader: Reader<Bytes>, endianness: Endianness) -> Self {
         Self { reader, endianness }
     }
+
+    pub(crate) fn endianness(&self) -> Endianness {
+        self.endianness
+    }
+
+    pub(crate) fn advance(&mut self, amt: u64) -> AsyncTiffResult<u64> {
+        // TODO: can we use consume?
+        // from https://stackoverflow.com/a/42247224
+        Ok(std::io::copy(
+            &mut self.reader.by_ref().take(amt),
+            &mut std::io::sink(),
+        )?)
+    }
+
     /// Read a u8 from the cursor, advancing the internal state by 1 byte.
     pub(crate) fn read_u8(&mut self) -> AsyncTiffResult<u8> {
         Ok(self.reader.read_u8()?)

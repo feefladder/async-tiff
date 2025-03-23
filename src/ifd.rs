@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::{buf::Buf, Bytes};
 use num_enum::TryFromPrimitive;
@@ -195,26 +196,24 @@ impl ImageFileDirectory {
         } else {
             cursor.read_u16().await?.into()
         };
-        let mut tags = HashMap::with_capacity(tag_count as usize);
-        for _ in 0..tag_count {
-            let (tag_name, tag_value) = read_tag(cursor, bigtiff).await?;
-            tags.insert(tag_name, tag_value);
-        }
-
         // Tag   2 bytes
         // Type  2 bytes
         // Count:
         //  - bigtiff: 8 bytes
         //  - else: 4 bytes
         // Value:
-        //  - bigtiff: 8 bytes either a pointer the value itself
-        //  - else: 4 bytes either a pointer the value itself
+        //  - bigtiff: 8 bytes either a pointer or the value itself
+        //  - else: 4 bytes either a pointer or the value itself
         let ifd_entry_byte_size = if bigtiff { 20 } else { 12 };
-        // The size of `tag_count` that we read above
-        let tag_count_byte_size = if bigtiff { 8 } else { 2 };
 
-        // Reset the cursor position before reading the next ifd offset
-        cursor.seek(ifd_start + (ifd_entry_byte_size * tag_count) + tag_count_byte_size);
+        // read all tag data into an EndianAwareReader
+        let mut reader = cursor.read(ifd_entry_byte_size * tag_count).await?;
+
+        let mut tags = HashMap::with_capacity(tag_count as usize);
+        for _ in 0..tag_count {
+            let (tag_name, tag_value) = read_tag(&mut reader, cursor.reader(), bigtiff).await?;
+            tags.insert(tag_name, tag_value);
+        }
 
         let next_ifd_offset = if bigtiff {
             cursor.read_u64().await?
@@ -838,22 +837,57 @@ impl ImageFileDirectory {
 }
 
 /// Read a single tag from the cursor
-async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(Tag, Value)> {
+async fn read_tag(
+    cursor: &mut EndianAwareReader,
+    file_reader: &Arc<dyn AsyncFileReader>,
+    bigtiff: bool,
+) -> AsyncTiffResult<(Tag, Value)> {
     // let start_cursor_position = cursor.position();
 
-    let tag_name = Tag::from_u16_exhaustive(cursor.read_u16().await?);
+    let tag_name = Tag::from_u16_exhaustive(cursor.read_u16()?);
 
-    let tag_type_code = cursor.read_u16().await?;
+    let tag_type_code = cursor.read_u16()?;
     let tag_type = Type::from_u16(tag_type_code).expect(
         "Unknown tag type {tag_type_code}. TODO: we should skip entries with unknown tag types.",
     );
     let count = if bigtiff {
-        cursor.read_u64().await?
+        cursor.read_u64()?
     } else {
-        cursor.read_u32().await?.into()
+        cursor.read_u32()?.into()
     };
 
-    let tag_value = read_tag_value(cursor, tag_type, count, bigtiff).await?;
+    let tag_size = tag_type.size();
+
+    let value_byte_length = count.checked_mul(tag_size).unwrap();
+
+    // prefetch all tag data
+    let mut data = if (bigtiff && value_byte_length <= 8) || value_byte_length <= 4 {
+        // value fits in offset field
+        let mut res = vec![0u8; value_byte_length as usize];
+        cursor.read_exact(&mut res)?;
+        if bigtiff {
+            cursor.advance(8 - value_byte_length)?;
+        } else {
+            cursor.advance(4 - value_byte_length)?;
+        }
+        EndianAwareReader::new(Bytes::from_owner(res).reader(), cursor.endianness())
+    } else {
+        // fetch using file_reader
+        let offset = if bigtiff {
+            cursor.read_u64()?
+        } else {
+            cursor.read_u32()?.into()
+        };
+        let reader = file_reader
+            .get_bytes(offset..offset + value_byte_length)
+            .await?
+            .reader();
+        EndianAwareReader::new(reader, cursor.endianness())
+        // cursor.seek(offset);
+        // cursor.read(value_byte_length).await?
+    };
+
+    let tag_value = read_tag_value(&mut data, tag_type, count)?;
 
     // TODO: better handle management of cursor state <- should be done now
     // let ifd_entry_size = if bigtiff { 20 } else { 12 };
@@ -867,47 +901,16 @@ async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(T
 /// NOTE: this does not maintain cursor state
 // This is derived from the upstream tiff crate:
 // https://github.com/image-rs/image-tiff/blob/6dc7a266d30291db1e706c8133357931f9e2a053/src/decoder/ifd.rs#L369-L639
-async fn read_tag_value(
-    cursor: &mut AsyncCursor,
+fn read_tag_value(
+    data: &mut EndianAwareReader,
     tag_type: Type,
     count: u64,
-    bigtiff: bool,
 ) -> AsyncTiffResult<Value> {
     // Case 1: there are no values so we can return immediately.
     if count == 0 {
         return Ok(Value::List(vec![]));
     }
 
-    let tag_size = tag_type.size();
-
-    let value_byte_length = count.checked_mul(tag_size).unwrap();
-
-    // prefetch all tag data
-    let mut data = if (bigtiff && value_byte_length <= 8) || value_byte_length <= 4 {
-        // value fits in offset field
-        let res = cursor.read(value_byte_length).await?;
-        if bigtiff {
-            cursor.advance(8 - value_byte_length);
-        } else {
-            cursor.advance(4 - value_byte_length);
-        }
-        res
-    } else {
-        // Seek cursor
-        let offset = if bigtiff {
-            cursor.read_u64().await?
-        } else {
-            cursor.read_u32().await?.into()
-        };
-        let reader = cursor
-            .reader()
-            .get_bytes(offset..offset + value_byte_length)
-            .await?
-            .reader();
-        EndianAwareReader::new(reader, cursor.endianness())
-        // cursor.seek(offset);
-        // cursor.read(value_byte_length).await?
-    };
     // Case 2: there is one value.
     if count == 1 {
         return Ok(match tag_type {
