@@ -73,6 +73,8 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
 /// This wrapper is needed because `AsyncRead` and `AsyncSeek` require mutable access to seek and
 /// read data, while the `AsyncFileReader` trait requires immutable access to read data.
 ///
+/// This wrapper stores the inner reader in a `Mutex`.
+///
 /// [AsyncRead]: tokio::io::AsyncRead
 /// [AsyncSeek]: tokio::io::AsyncSeek
 #[cfg(feature = "tokio")]
