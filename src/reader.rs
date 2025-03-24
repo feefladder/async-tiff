@@ -8,8 +8,8 @@ use std::sync::Arc;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
-use futures::future::{BoxFuture, FutureExt, TryFutureExt};
-use object_store::ObjectStore;
+use futures::future::{BoxFuture, FutureExt};
+use futures::TryFutureExt;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 
@@ -67,45 +67,75 @@ impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
     }
 }
 
-// #[cfg(feature = "tokio")]
-// impl<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Debug + Send + Sync> AsyncFileReader
-//     for T
-// {
-//     fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
-//         use tokio::io::{AsyncReadExt, AsyncSeekExt};
+/// A wrapper for things that implement [AsyncRead] and [AsyncSeek] to also implement
+/// [AsyncFileReader].
+///
+/// This wrapper is needed because `AsyncRead` and `AsyncSeek` require mutable access to seek and
+/// read data, while the `AsyncFileReader` trait requires immutable access to read data.
+///
+/// This wrapper stores the inner reader in a `Mutex`.
+///
+/// [AsyncRead]: tokio::io::AsyncRead
+/// [AsyncSeek]: tokio::io::AsyncSeek
+#[cfg(feature = "tokio")]
+#[derive(Debug)]
+pub struct TokioReader<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Send + Debug>(
+    tokio::sync::Mutex<T>,
+);
 
-//         async move {
-//             self.seek(std::io::SeekFrom::Start(range.start)).await?;
+#[cfg(feature = "tokio")]
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Send + Debug> TokioReader<T> {
+    /// Create a new TokioReader from a reader.
+    pub fn new(inner: T) -> Self {
+        Self(tokio::sync::Mutex::new(inner))
+    }
+}
 
-//             let to_read = (range.end - range.start).try_into().unwrap();
-//             let mut buffer = Vec::with_capacity(to_read);
-//             let read = self.take(to_read as u64).read_to_end(&mut buffer).await?;
-//             if read != to_read {
-//                 return Err(AsyncTiffError::EndOfFile(to_read, read));
-//             }
+#[cfg(feature = "tokio")]
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Send + Debug> AsyncFileReader
+    for TokioReader<T>
+{
+    fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        use std::io::SeekFrom;
+        use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-//             Ok(buffer.into())
-//         }
-//         .boxed()
-//     }
-// }
+        async move {
+            let mut file = self.0.lock().await;
+
+            file.seek(SeekFrom::Start(range.start)).await?;
+
+            let to_read = range.end - range.start;
+            let mut buffer = Vec::with_capacity(to_read as usize);
+            let read = file.read(&mut buffer).await? as u64;
+            if read != to_read {
+                return Err(AsyncTiffError::EndOfFile(to_read, read));
+            }
+
+            Ok(buffer.into())
+        }
+        .boxed()
+    }
+}
 
 /// An AsyncFileReader that reads from an [`ObjectStore`] instance.
+#[cfg(feature = "object_store")]
 #[derive(Clone, Debug)]
 pub struct ObjectReader {
-    store: Arc<dyn ObjectStore>,
+    store: Arc<dyn object_store::ObjectStore>,
     path: object_store::path::Path,
 }
 
+#[cfg(feature = "object_store")]
 impl ObjectReader {
     /// Creates a new [`ObjectReader`] for the provided [`ObjectStore`] and path
     ///
     /// [`ObjectMeta`] can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`]
-    pub fn new(store: Arc<dyn ObjectStore>, path: object_store::path::Path) -> Self {
+    pub fn new(store: Arc<dyn object_store::ObjectStore>, path: object_store::path::Path) -> Self {
         Self { store, path }
     }
 }
 
+#[cfg(feature = "object_store")]
 impl AsyncFileReader for ObjectReader {
     fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
         let range = range.start as _..range.end as _;
@@ -134,12 +164,14 @@ impl AsyncFileReader for ObjectReader {
 }
 
 /// An AsyncFileReader that reads from a URL using reqwest.
+#[cfg(feature = "reqwest")]
 #[derive(Debug, Clone)]
 pub struct ReqwestReader {
     client: reqwest::Client,
     url: reqwest::Url,
 }
 
+#[cfg(feature = "reqwest")]
 impl ReqwestReader {
     /// Construct a new ReqwestReader from a reqwest client and URL.
     pub fn new(client: reqwest::Client, url: reqwest::Url) -> Self {
@@ -147,6 +179,7 @@ impl ReqwestReader {
     }
 }
 
+#[cfg(feature = "reqwest")]
 impl AsyncFileReader for ReqwestReader {
     fn get_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
         let url = self.url.clone();

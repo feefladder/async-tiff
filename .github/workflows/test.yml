@@ -26,8 +26,10 @@ jobs:
       - name: "clippy --all"
         run: cargo clippy --all --all-features --tests -- -D warnings
 
-      - name: "cargo check"
-        run: cargo check --all --all-features
+      - run: cargo install cargo-all-features
+
+      - name: Check all combinations of features can build
+        run: cargo check-all-features
 
       - name: "cargo test"
         run: |

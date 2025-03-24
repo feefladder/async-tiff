@@ -9,7 +9,7 @@ use thiserror::Error;
 pub enum AsyncTiffError {
     /// End of file error.
     #[error("End of File: expected to read {0} bytes, got {1}")]
-    EndOfFile(usize, usize),
+    EndOfFile(u64, u64),
 
     /// General error.
     #[error("General error: {0}")]
@@ -24,6 +24,7 @@ pub enum AsyncTiffError {
     JPEGDecodingError(#[from] jpeg::Error),
 
     /// Error while fetching data using object store.
+    #[cfg(feature = "object_store")]
     #[error(transparent)]
     ObjectStore(#[from] object_store::Error),
 
@@ -32,6 +33,7 @@ pub enum AsyncTiffError {
     InternalTIFFError(#[from] crate::tiff::TiffError),
 
     /// Reqwest error
+    #[cfg(feature = "reqwest")]
     #[error(transparent)]
     ReqwestError(#[from] reqwest::Error),
 
