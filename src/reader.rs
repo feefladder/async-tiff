@@ -9,10 +9,7 @@ use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use bytes::buf::Reader;
 use bytes::{Buf, Bytes};
 use futures::future::{BoxFuture, FutureExt};
-#[cfg(feature = "object_store")]
 use futures::TryFutureExt;
-#[cfg(feature = "object_store")]
-use object_store::ObjectStore;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 
@@ -122,7 +119,7 @@ impl<T: tokio::io::AsyncRead + tokio::io::AsyncSeek + Unpin + Send + Debug> Asyn
 #[cfg(feature = "object_store")]
 #[derive(Clone, Debug)]
 pub struct ObjectReader {
-    store: Arc<dyn ObjectStore>,
+    store: Arc<dyn object_store::ObjectStore>,
     path: object_store::path::Path,
 }
 
@@ -131,7 +128,7 @@ impl ObjectReader {
     /// Creates a new [`ObjectReader`] for the provided [`ObjectStore`] and path
     ///
     /// [`ObjectMeta`] can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`]
-    pub fn new(store: Arc<dyn ObjectStore>, path: object_store::path::Path) -> Self {
+    pub fn new(store: Arc<dyn object_store::ObjectStore>, path: object_store::path::Path) -> Self {
         Self { store, path }
     }
 }
