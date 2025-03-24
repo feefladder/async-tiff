@@ -20,12 +20,18 @@ object_store = { version = "0.12", optional = true }
 # object_store which uses reqwest.
 reqwest = { version = "0.12", default-features = false, optional = true }
 thiserror = "1"
-tokio = { version = "1.43.0", optional = true, features = ["fs", "io-util"] }
+tokio = { version = "1.43.0", optional = true }
 weezl = "0.1.0"
 
 [dev-dependencies]
+object_store = "0.12"
 tiff = "0.9.1"
-tokio = { version = "1.9", features = ["macros", "fs", "rt-multi-thread", "io-util"] }
+tokio = { version = "1.9", features = [
+    "macros",
+    "fs",
+    "rt-multi-thread",
+    "io-util",
+] }
 
 [features]
 default = ["object_store", "reqwest"]
@@ -34,8 +40,3 @@ reqwest = ["dep:reqwest"]
 object_store = ["dep:object_store"]
 
 [package.metadata.cargo-all-features]
-# If your crate has a large number of optional dependencies, skip them for speed
-# skip_optional_dependencies = true
-
-# Exclude certain features from the build matrix
-denylist = ["default"]

@@ -9,7 +9,7 @@ use thiserror::Error;
 pub enum AsyncTiffError {
     /// End of file error.
     #[error("End of File: expected to read {0} bytes, got {1}")]
-    EndOfFile(usize, usize),
+    EndOfFile(u64, u64),
 
     /// General error.
     #[error("General error: {0}")]
