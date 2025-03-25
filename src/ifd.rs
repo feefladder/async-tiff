@@ -949,7 +949,7 @@ async fn read_tag_value(
         Type::SBYTE => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
-                v.push(Value::SignedByte(data.read_i8()?));
+                v.push(Value::Signed(data.read_i8()? as i32));
             }
             Ok(Value::List(v))
         }
