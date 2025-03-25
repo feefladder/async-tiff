@@ -3,7 +3,7 @@
 use std::fmt::Debug;
 use std::io::Read;
 use std::ops::Range;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt};
 use bytes::buf::Reader;
@@ -272,9 +272,10 @@ impl AsyncFileReader for PrefetchReader {
                     }
                 }
                 let range_len = range.end - range.start;
-                let estimate = 2 * (range_len + range_len.isqrt());
+                let estimate = 2 * (range_len + range_len.isqrt()).max(1024*16);
                 let new_c_range = range.start..range.start + estimate;
                 let res = self.reader.get_metadata_bytes(new_c_range.clone()).await?;
+                println!("fetched {new_c_range:?}");
                 {
                     let mut lock = self.tile_info_cache.lock().await;
                     *lock = (new_c_range, res.clone());
