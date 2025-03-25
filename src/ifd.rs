@@ -839,8 +839,6 @@ impl ImageFileDirectory {
 
 /// Read a single tag from the cursor
 async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(Tag, Value)> {
-    // let start_cursor_position = cursor.position();
-
     let tag_name = Tag::from_u16_exhaustive(cursor.read_u16().await?);
 
     let tag_type_code = cursor.read_u16().await?;
@@ -854,10 +852,6 @@ async fn read_tag(cursor: &mut AsyncCursor, bigtiff: bool) -> AsyncTiffResult<(T
     };
 
     let tag_value = read_tag_value(cursor, tag_type, count, bigtiff).await?;
-
-    // TODO: better handle management of cursor state <- should be done now
-    // let ifd_entry_size = if bigtiff { 20 } else { 12 };
-    // cursor.seek(start_cursor_position + ifd_entry_size);
 
     Ok((tag_name, tag_value))
 }
@@ -878,7 +872,17 @@ async fn read_tag_value(
         return Ok(Value::List(vec![]));
     }
 
-    let tag_size = tag_type.size();
+    let tag_size = match tag_type {
+        Type::BYTE | Type::SBYTE | Type::ASCII | Type::UNDEFINED => 1,
+        Type::SHORT | Type::SSHORT => 2,
+        Type::LONG | Type::SLONG | Type::FLOAT | Type::IFD => 4,
+        Type::LONG8
+        | Type::SLONG8
+        | Type::DOUBLE
+        | Type::RATIONAL
+        | Type::SRATIONAL
+        | Type::IFD8 => 8,
+    };
 
     let value_byte_length = count.checked_mul(tag_size).unwrap();
 
@@ -901,12 +905,10 @@ async fn read_tag_value(
         };
         let reader = cursor
             .reader()
-            .get_bytes(offset..offset + value_byte_length)
+            .get_metadata_bytes(offset..offset + value_byte_length)
             .await?
             .reader();
         EndianAwareReader::new(reader, cursor.endianness())
-        // cursor.seek(offset);
-        // cursor.read(value_byte_length).await?
     };
     // Case 2: there is one value.
     if count == 1 {
