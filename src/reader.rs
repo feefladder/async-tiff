@@ -13,6 +13,13 @@ use futures::TryFutureExt;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 
+#[cfg(all(not(feature = "tokio"), feature = "async_mutex"))]
+use async_mutex::Mutex;
+#[cfg(feature = "tokio")]
+use tokio::sync::Mutex;
+#[cfg(not(any(feature="tokio", feature="async_mutex")))]
+compile_error!("at least one of 'tokio' or 'async_mutex' features should be enabled");
+
 /// The asynchronous interface used to read COG files
 ///
 /// This was derived from the Parquet
@@ -231,29 +238,50 @@ impl AsyncFileReader for ReqwestReader {
 pub struct PrefetchReader {
     reader: Arc<dyn AsyncFileReader>,
     buffer: Bytes,
+    tile_info_cache: Mutex<(Range<u64>, Bytes)>,
 }
 
 impl PrefetchReader {
     /// Construct a new PrefetchReader, catching the first `prefetch` bytes of the file.
     pub async fn new(reader: Arc<dyn AsyncFileReader>, prefetch: u64) -> AsyncTiffResult<Self> {
         let buffer = reader.get_metadata_bytes(0..prefetch).await?;
-        Ok(Self { reader, buffer })
+        let tile_info_cache = Mutex::new((0..0, Bytes::new()));
+        Ok(Self {
+            reader,
+            buffer,
+            tile_info_cache,
+        })
     }
 }
 
 impl AsyncFileReader for PrefetchReader {
     fn get_metadata_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
-        if range.start < self.buffer.len() as _ {
-            if range.end < self.buffer.len() as _ {
-                let usize_range = range.start as usize..range.end as usize;
-                let result = self.buffer.slice(usize_range);
-                async { Ok(result) }.boxed()
-            } else {
-                // TODO: reuse partial internal buffer
-                self.reader.get_metadata_bytes(range)
-            }
+        if range.end < self.buffer.len() as _ {
+            let usize_range = range.start as usize..range.end as usize;
+            let result = self.buffer.slice(usize_range);
+            async { Ok(result) }.boxed()
         } else {
-            self.reader.get_metadata_bytes(range)
+            async move {
+                {
+                    let lock = self.tile_info_cache.lock().await;
+                    // let (c_range, cache) = (lock.0, lock.1);
+                    if range.start >= lock.0.start && range.end <= lock.0.end {
+                        let usize_range = (range.start - lock.0.start) as usize
+                            ..(range.end - lock.0.start) as usize;
+                        return Ok(lock.1.slice(usize_range));
+                    }
+                }
+                let range_len = range.end - range.start;
+                let estimate = 2 * (range_len + range_len.isqrt());
+                let new_c_range = range.start..range.start + estimate;
+                let res = self.reader.get_metadata_bytes(new_c_range.clone()).await?;
+                {
+                    let mut lock = self.tile_info_cache.lock().await;
+                    *lock = (new_c_range, res.clone());
+                }
+                Ok(res.slice(0..range_len as _))
+            }
+            .boxed()
         }
     }
 
