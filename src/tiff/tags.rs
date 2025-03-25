@@ -175,22 +175,6 @@ pub enum Type(u16) {
 }
 }
 
-impl Type {
-    pub const fn size(&self) -> u64 {
-        match self {
-            Type::BYTE | Type::SBYTE | Type::ASCII | Type::UNDEFINED => 1,
-            Type::SHORT | Type::SSHORT => 2,
-            Type::LONG | Type::SLONG | Type::FLOAT | Type::IFD => 4,
-            Type::LONG8
-            | Type::SLONG8
-            | Type::DOUBLE
-            | Type::RATIONAL
-            | Type::SRATIONAL
-            | Type::IFD8 => 8,
-        }
-    }
-}
-
 tags! {
 /// See [TIFF compression tags](https://www.awaresystems.be/imaging/tiff/tifftags/compression.html)
 /// for reference.
