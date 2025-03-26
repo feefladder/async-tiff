@@ -17,7 +17,7 @@ use crate::error::{AsyncTiffError, AsyncTiffResult};
 use async_mutex::Mutex;
 #[cfg(feature = "tokio")]
 use tokio::sync::Mutex;
-#[cfg(not(any(feature="tokio", feature="async_mutex")))]
+#[cfg(not(any(feature = "tokio", feature = "async_mutex")))]
 compile_error!("at least one of 'tokio' or 'async_mutex' features should be enabled");
 
 /// The asynchronous interface used to read COG files
@@ -233,7 +233,69 @@ impl AsyncFileReader for ReqwestReader {
     }
 }
 
-/// An AsyncFileReader that caches the first `prefetch` bytes of a file.
+impl AsyncFileReader for Bytes {
+    fn get_image_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        self.get_metadata_bytes(range)
+    }
+
+    fn get_metadata_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        if range.end <= self.len() as _ {
+            let usize_range = range.start as usize..range.end as usize;
+            async { Ok(self.slice(usize_range)) }.boxed()
+        } else {
+            let range_len = range.end - range.start;
+            let range_read = range_len - (range.end-self.len() as u64);
+            async move { Err(AsyncTiffError::EndOfFile(range_len, range_read)) }.boxed()
+        }
+    }
+}
+
+/// An AsyncFileReader that caches the first `prefetch` bytes of a file. Also
+/// holds a cache for out-of-prefetch metadata.
+///
+/// When a request is out-of-bounds, an estimate of the remaining
+/// `tile_offsets`/`tile_byte_counts` array is made as `2*(len+2*len.isqrt())`
+///
+/// # Examples
+///
+/// ```
+/// # futures::executor::block_on( async { // https://stackoverflow.com/a/64597248/14681457
+/// # use async_tiff::error::AsyncTiffError;
+/// # use async_tiff::reader::{AsyncFileReader, PrefetchReader};
+/// # use bytes::Bytes;
+/// # use std::sync::Arc;
+/// #
+/// # let file = Bytes::from_static(&[42u8; 128 * 1024]);
+/// #
+/// // create a reader that prefetches the first 16 kB
+/// let reader = PrefetchReader::new(Arc::new(file), 16 * 1024).await?;
+///
+/// // get some data from the prefetch
+/// assert_eq!(*reader.get_metadata_bytes(42..1312).await?, [42; 1312 - 42]);
+///
+/// const start: u64 = 16 * 1024;
+/// const len: u64 = 16 * 1024;
+/// // get some data from outside the prefetch range
+/// assert_eq!(
+///     *reader.get_metadata_bytes(start..start + len).await?,
+///     [42; 16 * 1024]
+/// );
+/// 
+/// // this is now also (exactly) cached
+/// assert_eq!(
+///     *reader
+///         .get_metadata_bytes(start..start + 2 * (len + 2 * len.isqrt()))
+///         .await?,
+///     [42; 2 * (len + 2 * len.isqrt()) as usize]
+/// );
+///
+/// // this will not check the cache
+/// reader.get_image_bytes(start..start + len).await?;
+/// 
+/// # Ok::<(),AsyncTiffError>(())
+/// # });
+/// ```
+#[cfg(any(feature = "tokio", feature = "async_mutex"))]
 #[derive(Debug)]
 pub struct PrefetchReader {
     reader: Arc<dyn AsyncFileReader>,
@@ -241,6 +303,7 @@ pub struct PrefetchReader {
     tile_info_cache: Mutex<(Range<u64>, Bytes)>,
 }
 
+#[cfg(any(feature = "tokio", feature = "async_mutex"))]
 impl PrefetchReader {
     /// Construct a new PrefetchReader, catching the first `prefetch` bytes of the file.
     pub async fn new(reader: Arc<dyn AsyncFileReader>, prefetch: u64) -> AsyncTiffResult<Self> {
@@ -254,8 +317,10 @@ impl PrefetchReader {
     }
 }
 
+#[cfg(any(feature = "tokio", feature = "async_mutex"))]
 impl AsyncFileReader for PrefetchReader {
     fn get_metadata_bytes(&self, range: Range<u64>) -> BoxFuture<'_, AsyncTiffResult<Bytes>> {
+        // check prefetch
         if range.end < self.buffer.len() as _ {
             let usize_range = range.start as usize..range.end as usize;
             let result = self.buffer.slice(usize_range);
@@ -263,22 +328,27 @@ impl AsyncFileReader for PrefetchReader {
         } else {
             async move {
                 {
+                    // check cache
                     let lock = self.tile_info_cache.lock().await;
-                    // let (c_range, cache) = (lock.0, lock.1);
                     if range.start >= lock.0.start && range.end <= lock.0.end {
                         let usize_range = (range.start - lock.0.start) as usize
                             ..(range.end - lock.0.start) as usize;
                         return Ok(lock.1.slice(usize_range));
                     }
                 }
+                // determine new cache size
                 let range_len = range.end - range.start;
-                let estimate = 2 * (range_len + range_len.isqrt());
+                let estimate = 2 * (range_len + 2 * range_len.isqrt()).max(8 * 1024);
                 let new_c_range = range.start..range.start + estimate;
+
+                // put in new cache
                 let res = self.reader.get_metadata_bytes(new_c_range.clone()).await?;
                 {
                     let mut lock = self.tile_info_cache.lock().await;
                     *lock = (new_c_range, res.clone());
                 }
+
+                // yay
                 Ok(res.slice(0..range_len as _))
             }
             .boxed()
