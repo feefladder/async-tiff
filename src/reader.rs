@@ -244,7 +244,7 @@ impl AsyncFileReader for Bytes {
             async { Ok(self.slice(usize_range)) }.boxed()
         } else {
             let range_len = range.end - range.start;
-            let range_read = range_len - (range.end-self.len() as u64);
+            let range_read = range_len - (range.end - self.len() as u64);
             async move { Err(AsyncTiffError::EndOfFile(range_len, range_read)) }.boxed()
         }
     }
@@ -254,7 +254,9 @@ impl AsyncFileReader for Bytes {
 /// holds a cache for out-of-prefetch metadata.
 ///
 /// When a request is out-of-bounds, an estimate of the remaining
-/// `tile_offsets`/`tile_byte_counts` array is made as `2*(len+2*len.isqrt())`
+/// `tile_offsets`+`tile_byte_counts` array is made as
+/// `(2*len+4*len.isqrt()).max(prefetch)`, where `len` is the length of the
+/// requested range and `prefetch` is the size of the prefetch buffer.
 ///
 /// # Examples
 ///
@@ -280,7 +282,7 @@ impl AsyncFileReader for Bytes {
 ///     *reader.get_metadata_bytes(start..start + len).await?,
 ///     [42; 16 * 1024]
 /// );
-/// 
+///
 /// // this is now also (exactly) cached
 /// assert_eq!(
 ///     *reader
@@ -291,7 +293,7 @@ impl AsyncFileReader for Bytes {
 ///
 /// // this will not check the cache
 /// reader.get_image_bytes(start..start + len).await?;
-/// 
+///
 /// # Ok::<(),AsyncTiffError>(())
 /// # });
 /// ```
@@ -338,7 +340,20 @@ impl AsyncFileReader for PrefetchReader {
                 }
                 // determine new cache size
                 let range_len = range.end - range.start;
-                let estimate = 2 * (range_len + 2 * range_len.isqrt()).max(8 * 1024);
+                // estimate (for bigtiff):
+                // each overview is 1/4 the previous =geometric series=> 4/3*range_len
+                // assume request was TileOffsets =Long8+Long=> 3/2*4/3*range_len = 2*range_len
+                //
+                // add edge of one overview down:
+                // n_tiles0 = range_len/8
+                // n_tiles1 = 1/4*n_tiles0
+                // edge_tiles1 ≈ √n_tiles1 = √range_len/√2⁶ = √range_len/(4√2)
+                // each edge is 1/2 the previous =geometric series=> 2*edge_tiles1 = √range_len/(2√2)
+                // edge_bytes = 8*√range_len/(2√2) = 4/√2*√range_len
+                // Long8+Long => 3/2*4/√2*√range_len = 6/√2*√range_len ≈ 4*√range_len
+                //
+                // 2*range_len+4*√range_len
+                let estimate = (2 * range_len + 4 * range_len.isqrt()).max(self.buffer.len() as _);
                 let new_c_range = range.start..range.start + estimate;
 
                 // put in new cache
