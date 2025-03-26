@@ -17,8 +17,6 @@ use crate::error::{AsyncTiffError, AsyncTiffResult};
 use async_mutex::Mutex;
 #[cfg(feature = "tokio")]
 use tokio::sync::Mutex;
-#[cfg(not(any(feature = "tokio", feature = "async_mutex")))]
-compile_error!("at least one of 'tokio' or 'async_mutex' features should be enabled");
 
 /// The asynchronous interface used to read COG files
 ///
