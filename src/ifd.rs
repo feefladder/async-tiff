@@ -867,7 +867,7 @@ async fn read_tag_value(
     count: u64,
     bigtiff: bool,
 ) -> AsyncTiffResult<Value> {
-    // Case 1: there are no values so we can return immediately.
+    // Case 0: there are no values so we can return immediately.
     if count == 0 {
         return Ok(Value::List(vec![]));
     }
@@ -910,7 +910,8 @@ async fn read_tag_value(
             .reader();
         EndianAwareReader::new(reader, cursor.endianness())
     };
-    // Case 2: there is one value.
+
+    // Case 1: there is one value.
     if count == 1 {
         return Ok(match tag_type {
             Type::LONG8 => Value::UnsignedBig(data.read_u64()?),
@@ -938,6 +939,7 @@ async fn read_tag_value(
         });
     }
 
+    // Case 2: there is more than one value
     match tag_type {
         Type::BYTE | Type::UNDEFINED => {
             let mut v = Vec::with_capacity(count as _);
@@ -949,7 +951,7 @@ async fn read_tag_value(
         Type::SBYTE => {
             let mut v = Vec::with_capacity(count as _);
             for _ in 0..count {
-                v.push(Value::SignedByte(data.read_i8()?));
+                v.push(Value::Signed(data.read_i8()? as i32));
             }
             Ok(Value::List(v))
         }
