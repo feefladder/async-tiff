@@ -620,3 +620,304 @@ async fn read_tag_value<F: MetadataFetch>(
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use bytes::Bytes;
+    use futures::FutureExt;
+
+    use super::*;
+
+    impl MetadataFetch for Bytes {
+        fn fetch(
+            &self,
+            range: std::ops::Range<u64>,
+        ) -> futures::future::BoxFuture<'_, crate::error::AsyncTiffResult<Bytes>> {
+            let usize_range = range.start as usize..range.end as usize;
+            async { Ok(self.slice(usize_range)) }.boxed()
+        }
+    }
+
+    #[tokio::test]
+    #[rustfmt::skip]
+    async fn test_single_fits_notbig() {
+        // personal sanity checks
+        assert_eq!(u16::from_le_bytes([42,0]),42);
+        assert_eq!(u16::from_be_bytes([0,42]),42);
+        assert_eq!(f32::from_le_bytes([0x42,0,0,0]),f32::from_bits(0x00_00_00_42));
+        assert_eq!(f32::from_be_bytes([0,0,0,0x42]),f32::from_bits(0x00_00_00_42));
+        let cases= [
+        // tag type   count      offset
+        // /\  / \   /     \   /       \
+        ([1,1, 1, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Byte      (42                )),
+        ([1,1, 0, 1, 0,0,0,1, 42, 0, 0, 0], Endianness::BigEndian,    Value::Byte      (42                )),
+        ([1,1, 6, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Signed    (42                )), // sbyte
+        ([1,1, 0, 6, 0,0,0,1, 42, 0, 0, 0], Endianness::BigEndian,    Value::Signed    (42                )), // sbyte
+        ([1,1, 7, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Byte      (42                )), // undefined
+        ([1,1, 0, 7, 0,0,0,1, 42, 0, 0, 0], Endianness::BigEndian,    Value::Byte      (42                )), // undefined
+        ([1,1, 2, 0, 1,0,0,0,  0, 0, 0, 0], Endianness::LittleEndian, Value::Ascii     ("".into()         )),
+        ([1,1, 0, 2, 0,0,0,1,  0, 0, 0, 0], Endianness::BigEndian,    Value::Ascii     ("".into()         )),
+        ([1,1, 3, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Short     (42                )),
+        ([1,1, 0, 3, 0,0,0,1,  0,42, 0, 0], Endianness::BigEndian,    Value::Short     (42                )),
+        ([1,1, 8, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Signed    (42                )), // signedshort
+        ([1,1, 0, 8, 0,0,0,1,  0,42, 0, 0], Endianness::BigEndian,    Value::Signed    (42                )), // signedshort
+        ([1,1, 4, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Unsigned  (42                )),
+        ([1,1, 0, 4, 0,0,0,1,  0, 0, 0,42], Endianness::BigEndian,    Value::Unsigned  (42                )),
+        ([1,1, 9, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Signed    (42                )),
+        ([1,1, 0, 9, 0,0,0,1,  0, 0, 0,42], Endianness::BigEndian,    Value::Signed    (42                )),
+        ([1,1,13, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Ifd       (42                )),
+        ([1,1, 0,13, 0,0,0,1,  0, 0, 0,42], Endianness::BigEndian,    Value::Ifd       (42                )),
+        ([1,1,11, 0, 1,0,0,0, 42, 0, 0, 0], Endianness::LittleEndian, Value::Float     (f32::from_bits(42))),
+        ([1,1, 0,11, 0,0,0,1,  0, 0, 0,42], Endianness::BigEndian,    Value::Float     (f32::from_bits(42))),
+        // Double doesn't fit, neither 8-types and we special-case IFD
+        ];
+        for (buf, byte_order, res) in cases {
+                let fetch = Bytes::copy_from_slice(&buf);
+            assert_eq!(
+                read_tag(&fetch, 0, byte_order, false).await.unwrap(),
+                (Tag::from_u16_exhaustive(0x01_01),res)
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[rustfmt::skip]
+    async fn test_single_fits_big() {
+        // personal sanity checks
+        assert_eq!(u16::from_le_bytes([42,0]),42);
+        assert_eq!(u16::from_be_bytes([0,42]),42);
+
+        assert_eq!(f32::from_le_bytes([0x42,0,0,0]),f32::from_bits(0x00_00_00_42));
+        assert_eq!(f32::from_be_bytes([0,0,0,0x42]),f32::from_bits(0x00_00_00_42));
+        let cases = [
+        //      type       count            offset
+        //       / \  1 2 3 4 5 6 7 8   1  2  3  4  5  6  7  8
+        ([1,1,  1, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Byte       (42)                ),
+        ([1,1,  0, 1, 0,0,0,0,0,0,0,1, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::BigEndian,    Value::Byte       (42)                ),
+        ([1,1,  6, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Signed     (42)                ), // sbyte
+        ([1,1,  0, 6, 0,0,0,0,0,0,0,1, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::BigEndian,    Value::Signed     (42)                ), // sbyte
+        ([1,1,  7, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Byte       (42)                ), // undefined
+        ([1,1,  0, 7, 0,0,0,0,0,0,0,1, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::BigEndian,    Value::Byte       (42)                ), // undefined
+        ([1,1,  2, 0, 1,0,0,0,0,0,0,0,  0, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Ascii      ("".into())         ),
+        ([1,1,  0, 2, 0,0,0,0,0,0,0,1,  0, 0, 0, 0, 0, 0, 0, 0], Endianness::BigEndian,    Value::Ascii      ("".into())         ),
+        ([1,1,  3, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Short      (42)                ),
+        ([1,1,  0, 3, 0,0,0,0,0,0,0,1,  0,42, 0, 0, 0, 0, 0, 0], Endianness::BigEndian,    Value::Short      (42)                ),
+        ([1,1,  8, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Signed     (42)                ),  //sshort
+        ([1,1,  0, 8, 0,0,0,0,0,0,0,1,  0,42, 0, 0, 0, 0, 0, 0], Endianness::BigEndian,    Value::Signed     (42)                ),  //sshort
+        ([1,1,  4, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Unsigned   (42)                ),
+        ([1,1,  0, 4, 0,0,0,0,0,0,0,1,  0, 0, 0,42, 0, 0, 0, 0], Endianness::BigEndian,    Value::Unsigned   (42)                ),
+        ([1,1,  9, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Signed     (42)                ),
+        ([1,1,  0, 9, 0,0,0,0,0,0,0,1,  0, 0, 0,42, 0, 0, 0, 0], Endianness::BigEndian,    Value::Signed     (42)                ),
+        ([1,1, 13, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Ifd        (42)                ),
+        ([1,1,  0,13, 0,0,0,0,0,0,0,1,  0, 0, 0,42, 0, 0, 0, 0], Endianness::BigEndian,    Value::Ifd        (42)                ),
+        ([1,1, 16, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::UnsignedBig(42)                ),
+        ([1,1,  0,16, 0,0,0,0,0,0,0,1,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian,    Value::UnsignedBig(42)                ),
+        ([1,1, 17, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::SignedBig  (42)                ),
+        ([1,1,  0,17, 0,0,0,0,0,0,0,1,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian,    Value::SignedBig  (42)                ),
+        ([1,1, 18, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::IfdBig     (42)                ),
+        ([1,1,  0,18, 0,0,0,0,0,0,0,1,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian,    Value::IfdBig     (42)                ),
+        ([1,1, 11, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Float      (f32::from_bits(42))),
+        ([1,1,  0,11, 0,0,0,0,0,0,0,1,  0, 0, 0,42, 0, 0, 0, 0], Endianness::BigEndian,    Value::Float      (f32::from_bits(42))),
+        ([1,1, 12, 0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::Double     (f64::from_bits(42))),
+        ([1,1,  0,12, 0,0,0,0,0,0,0,1,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian,    Value::Double     (f64::from_bits(42))),
+        ([1,1,  5, 0, 1,0,0,0,0,0,0,0,  42,0, 0, 0,43, 0, 0, 0], Endianness::LittleEndian, Value::Rational   (42, 43)            ),
+        ([1,1,  0, 5, 0,0,0,0,0,0,0,1,  0, 0, 0,42, 0, 0, 0,43], Endianness::BigEndian,    Value::Rational   (42, 43)            ),
+        ([1,1,  10,0, 1,0,0,0,0,0,0,0, 42, 0, 0, 0,43, 0, 0, 0], Endianness::LittleEndian, Value::SRational  (42, 43)            ),
+        ([1,1,  0,10, 0,0,0,0,0,0,0,1,  0, 0, 0,42, 0, 0, 0,43], Endianness::BigEndian,    Value::SRational  (42, 43)            ),
+        // we special-case IFD
+        ];
+        for (buf, byte_order, res) in cases {
+            let fetch = Bytes::copy_from_slice(&buf);
+            assert_eq!(
+                read_tag(&fetch, 0, byte_order, true).await.unwrap(),
+                (Tag::from_u16_exhaustive(0x0101), res)
+            )
+        }
+    }
+
+    #[tokio::test]
+    #[rustfmt::skip]
+    async fn test_fits_multi_notbig() {
+        // personal sanity checks
+        assert_eq!(u16::from_le_bytes([42,0]),42);
+        assert_eq!(u16::from_be_bytes([0,42]),42);
+
+        assert_eq!(f32::from_le_bytes([0x42,0,0,0]),f32::from_bits(0x00_00_00_42));
+        assert_eq!(f32::from_be_bytes([0,0,0,0x42]),f32::from_bits(0x00_00_00_42));
+        let cases = [
+        //  tag type  count    offset
+        //  // /  \  /     \   /     \
+        ([1,1, 1, 0, 4,0,0,0, 42,42,42,42], Endianness::LittleEndian, Value::List(vec![Value::Byte     (42); 4]) ),
+        ([1,1, 0, 1, 0,0,0,4, 42,42,42,42], Endianness::BigEndian,    Value::List(vec![Value::Byte     (42); 4]) ),
+        ([1,1, 6, 0, 4,0,0,0, 42,42,42,42], Endianness::LittleEndian, Value::List(vec![Value::Signed   (42); 4]) ), //sbyte  i8
+        ([1,1, 0, 6, 0,0,0,4, 42,42,42,42], Endianness::BigEndian,    Value::List(vec![Value::Signed   (42); 4]) ), //sbyte  i8
+        ([1,1, 7, 0, 4,0,0,0, 42,42,42,42], Endianness::LittleEndian, Value::List(vec![Value::Byte     (42); 4]) ), // undefined
+        ([1,1, 0, 7, 0,0,0,4, 42,42,42,42], Endianness::BigEndian,    Value::List(vec![Value::Byte     (42); 4]) ), // undefined
+        ([1,1, 2, 0, 4,0,0,0, 42,42,42, 0], Endianness::LittleEndian, Value::Ascii("***".into())),
+        ([1,1, 0, 2, 0,0,0,4, 42,42,42, 0], Endianness::BigEndian,    Value::Ascii("***".into())),
+        ([1,1, 3, 0, 2,0,0,0, 42, 0,42, 0], Endianness::LittleEndian, Value::List(vec![Value::Short    (42); 2]) ),
+        ([1,1, 0, 3, 0,0,0,2,  0,42, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Short    (42); 2]) ),
+        ([1,1, 8, 0, 2,0,0,0, 42, 0,42, 0], Endianness::LittleEndian, Value::List(vec![Value::Signed   (42); 2]) ), //sshort i16
+        ([1,1, 0, 8, 0,0,0,2,  0,42, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Signed   (42); 2]) ), //sshort i16
+        ([1,1, 0, 2, 0,0,0,4, b'A',b'B',b'C',0], Endianness::BigEndian, Value::Ascii("ABC".into())),
+        // others don't fit, neither 8-types and we special-case IFD
+        ];
+        for (buf, byte_order, res) in cases {
+            println!("testing {buf:?} to be {res:?}");
+            let fetch = Bytes::copy_from_slice(&buf);
+            assert_eq!(
+                read_tag(&fetch, 0, byte_order, false).await.unwrap(),
+                (Tag::from_u16_exhaustive(0x0101), res)
+            )
+        }
+    }
+
+    #[tokio::test]
+    #[rustfmt::skip]
+    async fn test_fits_multi_big() {
+        // personal sanity checks
+        assert_eq!(u16::from_le_bytes([42,0]),42);
+        assert_eq!(u16::from_be_bytes([0,42]),42);
+
+        assert_eq!(f32::from_le_bytes([0x42,0,0,0]),f32::from_bits(0x00_00_00_42));
+        assert_eq!(f32::from_be_bytes([0,0,0,0x42]),f32::from_bits(0x00_00_00_42));
+        let cases = [
+        //     type       count            offset
+        //     / \  1 2 3 4 5 6 7 8   1  2  3  4  5  6  7  8
+        ([1,1, 1, 0, 8,0,0,0,0,0,0,0, 42,42,42,42,42,42,42,42], Endianness::LittleEndian, Value::List(vec![Value::Byte      (42)                ; 8])),
+        ([1,1, 0, 1, 0,0,0,0,0,0,0,8, 42,42,42,42,42,42,42,42], Endianness::BigEndian,    Value::List(vec![Value::Byte      (42)                ; 8])),
+        ([1,1, 6, 0, 8,0,0,0,0,0,0,0, 42,42,42,42,42,42,42,42], Endianness::LittleEndian, Value::List(vec![Value::Signed    (42)                ; 8])), //sbyte i8
+        ([1,1, 0, 6, 0,0,0,0,0,0,0,8, 42,42,42,42,42,42,42,42], Endianness::BigEndian,    Value::List(vec![Value::Signed    (42)                ; 8])), //sbyte i8
+        ([1,1, 7, 0, 8,0,0,0,0,0,0,0, 42,42,42,42,42,42,42,42], Endianness::LittleEndian, Value::List(vec![Value::Byte      (42)                ; 8])), //undefined u8
+        ([1,1, 0, 7, 0,0,0,0,0,0,0,8, 42,42,42,42,42,42,42,42], Endianness::BigEndian,    Value::List(vec![Value::Byte      (42)                ; 8])), //undefined u8
+        ([1,1, 2, 0, 8,0,0,0,0,0,0,0, 42,42,42,42,42,42,42, 0], Endianness::LittleEndian, Value::Ascii                      ("*******".into()       )),
+        ([1,1, 0, 2, 0,0,0,0,0,0,0,8, 42,42,42,42,42,42,42, 0], Endianness::BigEndian,    Value::Ascii                      ("*******".into()       )),
+        ([1,1, 3, 0, 4,0,0,0,0,0,0,0, 42, 0,42, 0,42, 0,42, 0], Endianness::LittleEndian, Value::List(vec![Value::Short     (42)                ; 4])),
+        ([1,1, 0, 3, 0,0,0,0,0,0,0,4,  0,42, 0,42, 0,42, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Short     (42)                ; 4])),
+        ([1,1, 8, 0, 4,0,0,0,0,0,0,0, 42, 0,42, 0,42, 0,42, 0], Endianness::LittleEndian, Value::List(vec![Value::Signed    (42)                ; 4])), //sshort i16
+        ([1,1, 0, 8, 0,0,0,0,0,0,0,4,  0,42, 0,42, 0,42, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Signed    (42)                ; 4])), //sshort i16
+        ([1,1, 4, 0, 2,0,0,0,0,0,0,0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Unsigned  (42)                ; 2])),
+        ([1,1, 0, 4, 0,0,0,0,0,0,0,2,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Unsigned  (42)                ; 2])),
+        ([1,1, 9, 0, 2,0,0,0,0,0,0,0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Signed    (42)                ; 2])),
+        ([1,1, 0, 9, 0,0,0,0,0,0,0,2,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Signed    (42)                ; 2])),
+        ([1,1,13, 0, 2,0,0,0,0,0,0,0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Ifd       (42)                ; 2])),
+        ([1,1, 0,13, 0,0,0,0,0,0,0,2,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Ifd       (42)                ; 2])),
+        ([1,1,11, 0, 2,0,0,0,0,0,0,0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Float     (f32::from_bits(42)); 2])),
+        ([1,1, 0,11, 0,0,0,0,0,0,0,2,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian,    Value::List(vec![Value::Float     (f32::from_bits(42)); 2])),
+        // we special-case IFD
+        ];
+        for (buf, byte_order, res) in cases {
+            let fetch = Bytes::copy_from_slice(&buf);
+            assert_eq!(
+                read_tag(&fetch, 0, byte_order, true).await.unwrap(),
+                (Tag::from_u16_exhaustive(0x0101), res)
+            )
+        }
+    }
+
+    #[tokio::test]
+    #[rustfmt::skip]
+    async fn test_notfits_notbig() {
+        // personal sanity checks
+        assert_eq!(u16::from_le_bytes([42,0]),42);
+        assert_eq!(u16::from_be_bytes([0,42]),42);
+
+        assert_eq!(f32::from_le_bytes([0x42,0,0,0]),f32::from_bits(0x00_00_00_42));
+        assert_eq!(f32::from_be_bytes([0,0,0,0x42]),f32::from_bits(0x00_00_00_42));
+        let cases = [
+        //          type  count    offset 12
+        //          /\   /     \   /     \
+        (vec![1,1, 1, 0, 5,0,0,0, 12, 0, 0, 0, 42,42,42,42,42],          Endianness::LittleEndian, Value::List(vec![Value::Byte       (42                 );5])),
+        (vec![1,1, 0, 1, 0,0,0,5,  0, 0, 0,12, 42,42,42,42,42],          Endianness::BigEndian   , Value::List(vec![Value::Byte       (42                 );5])),
+        (vec![1,1, 6, 0, 5,0,0,0, 12, 0, 0, 0, 42,42,42,42,42],          Endianness::LittleEndian, Value::List(vec![Value::Signed     (42                 );5])), // Type::SBYTE     ),
+        (vec![1,1, 0, 6, 0,0,0,5,  0, 0, 0,12, 42,42,42,42,42],          Endianness::BigEndian   , Value::List(vec![Value::Signed     (42                 );5])), // Type::SBYTE     ),
+        (vec![1,1, 7, 0, 5,0,0,0, 12, 0, 0, 0, 42,42,42,42,42],          Endianness::LittleEndian, Value::List(vec![Value::Byte       (42                 );5])), // Type::UNDEFINED ),
+        (vec![1,1, 0, 7, 0,0,0,5,  0, 0, 0,12, 42,42,42,42,42],          Endianness::BigEndian   , Value::List(vec![Value::Byte       (42                 );5])), // Type::UNDEFINED ),
+        (vec![1,1, 2, 0, 5,0,0,0, 12, 0, 0, 0, 42,42,42,42, 0],          Endianness::LittleEndian,                  Value::Ascii      ("****".into()      )    ),
+        (vec![1,1, 0, 2, 0,0,0,5,  0, 0, 0,12, 42,42,42,42, 0],          Endianness::BigEndian   ,                  Value::Ascii      ("****".into()      )    ),
+        (vec![1,1, 3, 0, 3,0,0,0, 12, 0, 0, 0, 42, 0,42, 0,42, 0],       Endianness::LittleEndian, Value::List(vec![Value::Short      (42                 );3])),
+        (vec![1,1, 0, 3, 0,0,0,3,  0, 0, 0,12,  0,42, 0,42, 0,42],       Endianness::BigEndian   , Value::List(vec![Value::Short      (42                 );3])),
+        (vec![1,1, 8, 0, 3,0,0,0, 12, 0, 0, 0, 42, 0,42, 0,42, 0],       Endianness::LittleEndian, Value::List(vec![Value::Signed     (42                 );3])), // Type::SSHORT    ),
+        (vec![1,1, 0, 8, 0,0,0,3,  0, 0, 0,12,  0,42, 0,42, 0,42],       Endianness::BigEndian   , Value::List(vec![Value::Signed     (42                 );3])), // Type::SSHORT    ),
+        (vec![1,1, 4, 0, 2,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Unsigned   (42                 );2])),
+        (vec![1,1, 0, 4, 0,0,0,2,  0, 0, 0,12,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::Unsigned   (42                 );2])),
+        (vec![1,1, 9, 0, 2,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Signed     (42                 );2])),
+        (vec![1,1, 0, 9, 0,0,0,2,  0, 0, 0,12,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::Signed     (42                 );2])),
+        (vec![1,1,13, 0, 2,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Ifd        (42                 );2])),
+        (vec![1,1, 0,13, 0,0,0,2,  0, 0, 0,12,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::Ifd        (42                 );2])),
+        (vec![1,1, 16,0, 1,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian,                  Value::UnsignedBig(42                 )    ),
+        (vec![1,1, 0,16, 0,0,0,1,  0, 0, 0,12,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   ,                  Value::UnsignedBig(42                 )    ),
+        (vec![1,1, 17,0, 1,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian,                  Value::SignedBig  (42                 )    ),
+        (vec![1,1, 0,17, 0,0,0,1,  0, 0, 0,12,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   ,                  Value::SignedBig  (42                 )    ),
+        (vec![1,1, 18,0, 1,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian,                  Value::IfdBig     (42                 )    ),
+        (vec![1,1, 0,18, 0,0,0,1,  0, 0, 0,12,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   ,                  Value::IfdBig     (42                 )    ),
+        (vec![1,1, 11,0, 2,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Float      (f32::from_bits(42) );2])),
+        (vec![1,1, 0,11, 0,0,0,2,  0, 0, 0,12,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::Float      (f32::from_bits(42) );2])),
+        (vec![1,1, 12,0, 1,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian,                  Value::Double     (f64::from_bits(42))     ),
+        (vec![1,1, 0,12, 0,0,0,1,  0, 0, 0,12,  0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   ,                  Value::Double     (f64::from_bits(42))     ),
+        (vec![1,1, 5, 0, 1,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian,                  Value::Rational   (42, 42             )    ),
+        (vec![1,1, 0, 5, 0,0,0,1,  0, 0, 0,12,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   ,                  Value::Rational   (42, 42             )    ),
+        (vec![1,1, 10,0, 1,0,0,0, 12, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian,                  Value::SRational  (42, 42             )    ),
+        (vec![1,1, 0,10, 0,0,0,1,  0, 0, 0,12,  0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   ,                  Value::SRational  (42, 42             )    ),
+        ];
+        for (buf, byte_order, res) in cases {
+            println!("reading {buf:?} to be {res:?}");
+            let fetch = Bytes::from_owner(buf);
+            assert_eq!(
+                read_tag(&fetch, 0, byte_order, false).await.unwrap(),
+                (Tag::from_u16_exhaustive(0x0101), res)
+            )
+        }
+    }
+
+    #[tokio::test]
+    #[rustfmt::skip]
+    async fn test_notfits_big() {
+        // personal sanity checks
+        assert_eq!(u16::from_le_bytes([42,0]),42);
+        assert_eq!(u16::from_be_bytes([0,42]),42);
+        assert_eq!(f32::from_le_bytes([0x42,0,0,0]),f32::from_bits(0x00_00_00_42));
+        assert_eq!(f32::from_be_bytes([0,0,0,0x42]),f32::from_bits(0x00_00_00_42));
+        let cases = [
+        //           type       count            offset
+        //           / \  1 2 3 4 5 6 7 8   1  2  3  4  5  6  7  8
+        (vec![1,1,  1, 0, 9,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42,42,42,42,42,42,42,42,42],                      Endianness::LittleEndian, Value::List(vec![Value::Byte       (42                );9])),
+        (vec![1,1,  0, 1, 0,0,0,0,0,0,0,9,  0, 0, 0, 0, 0, 0, 0,20, 42,42,42,42,42,42,42,42,42],                      Endianness::BigEndian   , Value::List(vec![Value::Byte       (42                );9])),
+        (vec![1,1,  6, 0, 9,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42,42,42,42,42,42,42,42,42],                      Endianness::LittleEndian, Value::List(vec![Value::Signed     (42                );9])), //TagType::SBYTE     ),
+        (vec![1,1,  0, 6, 0,0,0,0,0,0,0,9,  0, 0, 0, 0, 0, 0, 0,20, 42,42,42,42,42,42,42,42,42],                      Endianness::BigEndian   , Value::List(vec![Value::Signed     (42                );9])), //TagType::SBYTE     ),
+        (vec![1,1,  7, 0, 9,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42,42,42,42,42,42,42,42,42],                      Endianness::LittleEndian, Value::List(vec![Value::Byte       (42                );9])), //TagType::UNDEFINED ),
+        (vec![1,1,  0, 7, 0,0,0,0,0,0,0,9,  0, 0, 0, 0, 0, 0, 0,20, 42,42,42,42,42,42,42,42,42],                      Endianness::BigEndian   , Value::List(vec![Value::Byte       (42                );9])), //TagType::UNDEFINED ),
+        (vec![1,1,  2, 0, 9,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42,42,42,42,42,42,42,42, 0],                      Endianness::LittleEndian,                  Value::Ascii      ("********".into() )    ),
+        (vec![1,1,  0, 2, 0,0,0,0,0,0,0,9,  0, 0, 0, 0, 0, 0, 0,20, 42,42,42,42,42,42,42,42, 0],                      Endianness::BigEndian   ,                  Value::Ascii      ("********".into() )    ),
+        (vec![1,1,  3, 0, 5,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0,42, 0,42, 0,42, 0,42, 0],                   Endianness::LittleEndian, Value::List(vec![Value::Short      (42                );5])),
+        (vec![1,1,  0, 3, 0,0,0,0,0,0,0,5,  0, 0, 0, 0, 0, 0, 0,20,  0,42, 0,42, 0,42, 0,42, 0,42],                   Endianness::BigEndian   , Value::List(vec![Value::Short      (42                );5])),
+        (vec![1,1,  8, 0, 5,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0,42, 0,42, 0,42, 0,42, 0],                   Endianness::LittleEndian, Value::List(vec![Value::Signed     (42                );5])), //TagType::SSHORT    ),
+        (vec![1,1,  0, 8, 0,0,0,0,0,0,0,5,  0, 0, 0, 0, 0, 0, 0,20,  0,42, 0,42, 0,42, 0,42, 0,42],                   Endianness::BigEndian   , Value::List(vec![Value::Signed     (42                );5])), //TagType::SSHORT    ),
+        (vec![1,1,  4, 0, 3,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0],             Endianness::LittleEndian, Value::List(vec![Value::Unsigned   (42                );3])),
+        (vec![1,1,  0, 4, 0,0,0,0,0,0,0,3,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42],             Endianness::BigEndian   , Value::List(vec![Value::Unsigned   (42                );3])),
+        (vec![1,1,  9, 0, 3,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0],             Endianness::LittleEndian, Value::List(vec![Value::Signed     (42                );3])),
+        (vec![1,1,  0, 9, 0,0,0,0,0,0,0,3,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42],             Endianness::BigEndian   , Value::List(vec![Value::Signed     (42                );3])),
+        (vec![1,1, 13, 0, 3,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0],             Endianness::LittleEndian, Value::List(vec![Value::Ifd        (42                );3])),
+        (vec![1,1,  0,13, 0,0,0,0,0,0,0,3,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42],             Endianness::BigEndian   , Value::List(vec![Value::Ifd        (42                );3])),
+        (vec![1,1, 16, 0, 2,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::UnsignedBig(42                );2])),
+        (vec![1,1,  0,16, 0,0,0,0,0,0,0,2,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::UnsignedBig(42                );2])),
+        (vec![1,1, 17, 0, 2,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::SignedBig  (42                );2])),
+        (vec![1,1,  0,17, 0,0,0,0,0,0,0,2,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::SignedBig  (42                );2])),
+        (vec![1,1, 18, 0, 2,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::IfdBig     (42                );2])),
+        (vec![1,1,  0,18, 0,0,0,0,0,0,0,2,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::IfdBig     (42                );2])),
+        (vec![1,1, 11, 0, 3,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,],            Endianness::LittleEndian, Value::List(vec![Value::Float      (f32::from_bits(42));3])),
+        (vec![1,1,  0,11, 0,0,0,0,0,0,0,3,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42,],            Endianness::BigEndian   , Value::List(vec![Value::Float      (f32::from_bits(42));3])),
+        (vec![1,1, 12, 0, 2,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Double     (f64::from_bits(42));2])),
+        (vec![1,1,  0,12, 0,0,0,0,0,0,0,2,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0, 0, 0, 0, 0,42, 0, 0, 0, 0, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::Double     (f64::from_bits(42));2])),
+        (vec![1,1,  5, 0, 2,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::Rational   (42, 42            );2])),
+        (vec![1,1,  0, 5, 0,0,0,0,0,0,0,2,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::Rational   (42, 42            );2])),
+        (vec![1,1, 10, 0, 2,0,0,0,0,0,0,0, 20, 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0], Endianness::LittleEndian, Value::List(vec![Value::SRational  (42, 42            );2])),
+        (vec![1,1,  0,10, 0,0,0,0,0,0,0,2,  0, 0, 0, 0, 0, 0, 0,20,  0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42, 0, 0, 0,42], Endianness::BigEndian   , Value::List(vec![Value::SRational  (42, 42            );2])),
+        ];
+        for (buf, byte_order, res) in cases {
+            println!("reading {buf:?} to be {res:?}");
+            let fetch = Bytes::from_owner(buf);
+            assert_eq!(read_tag(&fetch, 0, byte_order, true).await.unwrap(), (Tag::from_u16_exhaustive(0x0101), res))
+        }
+    }
+}
