@@ -4,9 +4,7 @@ use crate::decoder::DecoderRegistry;
 use crate::error::AsyncTiffResult;
 use crate::predictor::{FloatingPointPredictor, HorizontalPredictor, NoPredictor, Unpredict};
 use crate::reader::Endianness;
-use crate::tiff::tags::{
-    CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor,
-};
+use crate::tiff::tags::{CompressionMethod, PhotometricInterpretation, Predictor};
 use crate::tiff::{TiffError, TiffUnsupportedError};
 
 /// All info that may be used by a predictor
@@ -36,10 +34,6 @@ pub(crate) struct PredictorInfo {
     pub(crate) bits_per_sample: u16,
     /// number of samples per pixel
     pub(crate) samples_per_pixel: u16,
-    /// planar configuration
-    ///
-    /// determines the bits per pixel
-    pub(crate) planar_configuration: PlanarConfiguration,
 }
 
 impl PredictorInfo {
@@ -257,7 +251,7 @@ impl Tile {
 
 #[cfg(test)]
 mod test {
-    use crate::{reader::Endianness, tiff::tags::PlanarConfiguration};
+    use crate::reader::Endianness;
 
     use super::PredictorInfo;
 
@@ -271,7 +265,6 @@ mod test {
             chunk_height: 8,
             bits_per_sample: 8,
             samples_per_pixel: 1,
-            planar_configuration: PlanarConfiguration::Chunky,
         };
         assert_eq!(info.chunks_across(), 2);
         assert_eq!(info.chunks_down(), 3);

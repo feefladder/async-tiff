@@ -704,7 +704,6 @@ impl ImageFileDirectory {
             },
             bits_per_sample: self.bits_per_sample[0],
             samples_per_pixel: self.samples_per_pixel,
-            planar_configuration: self.planar_configuration,
         }
     }
 

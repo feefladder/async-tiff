@@ -284,10 +284,7 @@ mod test {
 
     use bytes::Bytes;
 
-    use crate::{
-        predictor::FloatingPointPredictor, reader::Endianness, tiff::tags::PlanarConfiguration,
-        tile::PredictorInfo,
-    };
+    use crate::{predictor::FloatingPointPredictor, reader::Endianness, tile::PredictorInfo};
 
     use super::{HorizontalPredictor, NoPredictor, Unpredict};
 
@@ -299,7 +296,6 @@ mod test {
         chunk_height: 4,
         bits_per_sample: 8,
         samples_per_pixel: 1,
-        planar_configuration: crate::tiff::tags::PlanarConfiguration::Chunky,
     };
     #[rustfmt::skip]
     const RES: [u8;16] = [
@@ -503,7 +499,6 @@ mod test {
             chunk_height: 4,
             bits_per_sample: 16,
             samples_per_pixel: 1,
-            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
@@ -532,7 +527,6 @@ mod test {
             chunk_height: 4,
             bits_per_sample: 16,
             samples_per_pixel: 1,
-            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
@@ -560,7 +554,6 @@ mod test {
             chunk_height: 2,
             bits_per_sample: 32,
             samples_per_pixel: 1,
-            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
@@ -594,7 +587,6 @@ mod test {
             chunk_height: 2,
             bits_per_sample: 64,
             samples_per_pixel: 1,
-            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
