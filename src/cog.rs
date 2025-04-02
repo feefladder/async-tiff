@@ -25,6 +25,7 @@ mod test {
 
     use crate::decoder::DecoderRegistry;
     use crate::metadata::{PrefetchBuffer, TiffMetadataReader};
+    use crate::predictor::RevPredictorRegistry;
     use crate::reader::{AsyncFileReader, ObjectReader};
 
     use super::*;
@@ -52,8 +53,9 @@ mod test {
 
         let ifd = &tiff.ifds[1];
         let decoder_registry = DecoderRegistry::default();
+        let predictor_registry = RevPredictorRegistry::default();
         let tile = ifd.fetch_tile(0, 0, reader.as_ref()).await.unwrap();
-        let tile = tile.decode(&decoder_registry).unwrap();
+        let tile = tile.decode(&decoder_registry, &predictor_registry).unwrap();
         std::fs::write("img.buf", tile).unwrap();
     }
 

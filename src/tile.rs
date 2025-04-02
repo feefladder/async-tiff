@@ -2,8 +2,112 @@ use bytes::Bytes;
 
 use crate::decoder::DecoderRegistry;
 use crate::error::AsyncTiffResult;
-use crate::tiff::tags::{CompressionMethod, PhotometricInterpretation};
+use crate::predictor::RevPredictorRegistry;
+use crate::reader::Endianness;
+use crate::tiff::tags::{
+    CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, SampleFormat,
+};
 use crate::tiff::{TiffError, TiffUnsupportedError};
+
+/// All info that may be used by a predictor
+///
+/// Most of this is used by the floating point predictor
+/// since that intermixes padding into the decompressed output
+///
+/// Also provides convenience functions
+///
+#[derive(Debug, Clone, Copy)]
+pub struct PredictorInfo<'a> {
+    pub endianness: Endianness,
+    pub image_width: u32,
+    pub image_height: u32,
+    pub chunk_width: u32,
+    pub chunk_height: u32,
+    pub bits_per_sample: &'a [u16], // maybe say that we only support a single bits_per_sample?
+    pub samples_per_pixel: u16,
+    pub sample_format: &'a [SampleFormat], // and a single sample_format?
+    pub planar_configuration: PlanarConfiguration,
+}
+
+impl PredictorInfo<'_> {
+    /// chunk height in pixels, taking padding into account
+    ///
+    /// strips are considered image-width chunks
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// let info = PredictorInfo {
+    /// # endianness: Endianness::LittleEndian,
+    ///   image_width: 15,
+    ///   image_height: 15,
+    ///   chunk_width: 8,
+    ///   chunk_height: 8,
+    /// # bits_per_sample: &[32],
+    /// # samples_per_pixel: 1,
+    /// # sample_format: &[SampleFormat::IEEEFP],
+    /// # planar_configuration: PlanarConfiguration::Chunky,
+    /// }
+    ///
+    /// assert_eq!(info.chunk_width_pixels(1).unwrap(), (7))
+    /// info.chunk_width_pixels(2).unwrap_err()
+    /// ```
+    pub fn chunk_width_pixels(&self, x: u32) -> AsyncTiffResult<u32> {
+        if x >= self.chunks_across() {
+            return Err(crate::error::AsyncTiffError::TileIndexError(
+                x,
+                self.chunks_across(),
+            ));
+        } else if x == self.chunks_across() - 1 {
+            // last chunk
+            Ok(self.image_width - self.chunk_width * x)
+        } else {
+            Ok(self.chunk_width)
+        }
+    }
+
+    pub fn chunk_height_pixels(&self, y: u32) -> AsyncTiffResult<u32> {
+        if y >= self.chunks_down() {
+            Err(crate::error::AsyncTiffError::TileIndexError(
+                y,
+                self.chunks_down(),
+            ))
+        } else if y == self.chunks_down() - 1 {
+            // last chunk
+            Ok(self.image_height - self.chunk_height * y)
+        } else {
+            Ok(self.chunk_height)
+        }
+    }
+
+    /// get the output row stride in bytes, taking padding into account
+    pub fn output_row_stride(&self, x: u32) -> AsyncTiffResult<usize> {
+        Ok((self.chunk_width_pixels(x)? as usize).saturating_mul(self.bits_per_pixel()) / 8)
+    }
+
+    /// The total number of bits per pixel, taking into account possible different sample sizes
+    ///
+    /// Technically bits_per_sample.len() should be *equal* to samples, but libtiff also allows
+    /// it to be a single value that applies to all samples.
+    ///
+    /// Libtiff and image-tiff do not support mixed bits per sample, but we give the possibility
+    pub fn bits_per_pixel(&self) -> usize {
+        if self.bits_per_sample.len() == 1 {
+            self.samples_per_pixel as usize * self.bits_per_sample[0] as usize
+        } else {
+            assert_eq!(self.samples_per_pixel as usize, self.bits_per_sample.len());
+            self.bits_per_sample.iter().map(|v| *v as usize).product()
+        }
+    }
+
+    pub fn chunks_across(&self) -> u32 {
+        self.image_width.div_ceil(self.chunk_width)
+    }
+
+    pub fn chunks_down(&self) -> u32 {
+        self.image_height.div_ceil(self.chunk_height)
+    }
+}
 
 /// A TIFF Tile response.
 ///
@@ -12,16 +116,18 @@ use crate::tiff::{TiffError, TiffUnsupportedError};
 ///
 /// This is returned by `fetch_tile`.
 #[derive(Debug)]
-pub struct Tile {
+pub struct Tile<'a> {
     pub(crate) x: usize,
     pub(crate) y: usize,
+    pub(crate) predictor: Predictor,
+    pub(crate) predictor_info: PredictorInfo<'a>,
     pub(crate) compressed_bytes: Bytes,
     pub(crate) compression_method: CompressionMethod,
     pub(crate) photometric_interpretation: PhotometricInterpretation,
     pub(crate) jpeg_tables: Option<Bytes>,
 }
 
-impl Tile {
+impl Tile<'_> {
     /// The column index of this tile.
     pub fn x(&self) -> usize {
         self.x
@@ -60,7 +166,11 @@ impl Tile {
     ///
     /// Decoding is separate from fetching so that sync and async operations do not block the same
     /// runtime.
-    pub fn decode(self, decoder_registry: &DecoderRegistry) -> AsyncTiffResult<Bytes> {
+    pub fn decode(
+        self,
+        decoder_registry: &DecoderRegistry,
+        predictor_registry: &RevPredictorRegistry,
+    ) -> AsyncTiffResult<Bytes> {
         let decoder = decoder_registry
             .as_ref()
             .get(&self.compression_method)
@@ -68,10 +178,57 @@ impl Tile {
                 TiffUnsupportedError::UnsupportedCompressionMethod(self.compression_method),
             ))?;
 
-        decoder.decode_tile(
-            self.compressed_bytes.clone(),
-            self.photometric_interpretation,
-            self.jpeg_tables.as_deref(),
+        let predictor =
+            predictor_registry
+                .as_ref()
+                .get(&self.predictor)
+                .ok_or(TiffError::UnsupportedError(
+                    TiffUnsupportedError::UnsupportedPredictor(self.predictor),
+                ))?;
+
+        predictor.rev_predict_fix_endianness(
+            decoder.decode_tile(
+                self.compressed_bytes.clone(),
+                self.photometric_interpretation,
+                self.jpeg_tables.as_deref(),
+            )?,
+            &self.predictor_info,
+            self.x as _,
+            self.y as _,
         )
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::{
+        reader::Endianness,
+        tiff::tags::{PlanarConfiguration, SampleFormat},
+    };
+
+    use super::PredictorInfo;
+
+    #[test]
+    fn test_chunk_width_pixels() {
+        let info = PredictorInfo {
+            endianness: Endianness::LittleEndian,
+            image_width: 15,
+            image_height: 17,
+            chunk_width: 8,
+            chunk_height: 8,
+            bits_per_sample: &[8],
+            samples_per_pixel: 1,
+            sample_format: &[SampleFormat::Uint],
+            planar_configuration: PlanarConfiguration::Chunky,
+        };
+        assert_eq!(info.bits_per_pixel(), 8);
+        assert_eq!(info.chunks_across(), 2);
+        assert_eq!(info.chunks_down(), 3);
+        assert_eq!(info.chunk_width_pixels(0).unwrap(), info.chunk_width);
+        assert_eq!(info.chunk_width_pixels(1).unwrap(), 7);
+        info.chunk_width_pixels(2).unwrap_err();
+        assert_eq!(info.chunk_height_pixels(0).unwrap(), info.chunk_height);
+        assert_eq!(info.chunk_height_pixels(2).unwrap(), 1);
+        info.chunk_height_pixels(3).unwrap_err();
     }
 }

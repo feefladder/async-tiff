@@ -6,13 +6,13 @@ use num_enum::TryFromPrimitive;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::geo::{GeoKeyDirectory, GeoKeyTag};
-use crate::reader::AsyncFileReader;
+use crate::reader::{AsyncFileReader, Endianness};
 use crate::tiff::tags::{
     CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, ResolutionUnit,
     SampleFormat, Tag,
 };
 use crate::tiff::{TiffError, Value};
-use crate::tile::Tile;
+use crate::tile::{PredictorInfo, Tile};
 
 const DOCUMENT_NAME: u16 = 269;
 
@@ -21,6 +21,8 @@ const DOCUMENT_NAME: u16 = 269;
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ImageFileDirectory {
+    pub(crate) endianness: Endianness,
+
     pub(crate) new_subfile_type: Option<u32>,
 
     /// The number of columns in the image, i.e., the number of pixels per row.
@@ -143,7 +145,10 @@ pub struct ImageFileDirectory {
 
 impl ImageFileDirectory {
     /// Create a new ImageFileDirectory from tag data
-    pub fn from_tags(tag_data: HashMap<Tag, Value>) -> AsyncTiffResult<Self> {
+    pub fn from_tags(
+        tag_data: HashMap<Tag, Value>,
+        endianness: Endianness,
+    ) -> AsyncTiffResult<Self> {
         let mut new_subfile_type = None;
         let mut image_width = None;
         let mut image_height = None;
@@ -349,6 +354,7 @@ impl ImageFileDirectory {
             PlanarConfiguration::Chunky
         };
         Ok(Self {
+            endianness,
             new_subfile_type,
             image_width: image_width.expect("image_width not found"),
             image_height: image_height.expect("image_height not found"),
@@ -675,6 +681,30 @@ impl ImageFileDirectory {
         Some(offset as _..(offset + byte_count) as _)
     }
 
+    fn get_predictor_info(&self) -> PredictorInfo {
+        PredictorInfo {
+            endianness: self.endianness,
+            image_width: self.image_width,
+            image_height: self.image_height,
+            chunk_width: if self.tile_width.is_none() {
+                // we are stripped => image_width
+                self.image_width
+            } else {
+                self.tile_width.unwrap()
+            },
+            chunk_height: if self.tile_height.is_none() {
+                self.rows_per_strip
+                    .expect("no tile height and no rows_per_strip")
+            } else {
+                self.tile_height.unwrap()
+            },
+            bits_per_sample: &self.bits_per_sample,
+            samples_per_pixel: self.samples_per_pixel,
+            sample_format: &self.sample_format,
+            planar_configuration: self.planar_configuration,
+        }
+    }
+
     /// Fetch the tile located at `x` column and `y` row using the provided reader.
     pub async fn fetch_tile(
         &self,
@@ -689,6 +719,8 @@ impl ImageFileDirectory {
         Ok(Tile {
             x,
             y,
+            predictor: self.predictor.unwrap_or(Predictor::None),
+            predictor_info: self.get_predictor_info(),
             compressed_bytes,
             compression_method: self.compression,
             photometric_interpretation: self.photometric_interpretation,
@@ -724,6 +756,8 @@ impl ImageFileDirectory {
             let tile = Tile {
                 x,
                 y,
+                predictor: self.predictor.unwrap_or(Predictor::None),
+                predictor_info: self.get_predictor_info(),
                 compressed_bytes,
                 compression_method: self.compression,
                 photometric_interpretation: self.photometric_interpretation,
