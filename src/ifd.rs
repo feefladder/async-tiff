@@ -6,13 +6,14 @@ use num_enum::TryFromPrimitive;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::geo::{GeoKeyDirectory, GeoKeyTag};
+use crate::predictor::PredictorInfo;
 use crate::reader::{AsyncFileReader, Endianness};
 use crate::tiff::tags::{
     CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, ResolutionUnit,
     SampleFormat, Tag,
 };
 use crate::tiff::{TiffError, Value};
-use crate::tile::{PredictorInfo, Tile};
+use crate::tile::Tile;
 
 const DOCUMENT_NAME: u16 = 269;
 
@@ -681,35 +682,6 @@ impl ImageFileDirectory {
         Some(offset as _..(offset + byte_count) as _)
     }
 
-    fn get_predictor_info(&self) -> PredictorInfo {
-        if !self.bits_per_sample.windows(2).all(|w| w[0] == w[1]) {
-            panic!("bits_per_sample should be the same for all channels");
-        }
-
-        let chunk_width = if let Some(tile_width) = self.tile_width {
-            tile_width
-        } else {
-            self.image_width
-        };
-        let chunk_height = if let Some(tile_height) = self.tile_height {
-            tile_height
-        } else {
-            self.rows_per_strip
-                .expect("no tile height and no rows_per_strip")
-        };
-
-        PredictorInfo {
-            endianness: self.endianness,
-            image_width: self.image_width,
-            image_height: self.image_height,
-            chunk_width,
-            chunk_height,
-            // TODO: validate this? Restore handling for different PlanarConfiguration?
-            bits_per_sample: self.bits_per_sample[0],
-            samples_per_pixel: self.samples_per_pixel,
-        }
-    }
-
     /// Fetch the tile located at `x` column and `y` row using the provided reader.
     pub async fn fetch_tile(
         &self,
@@ -725,7 +697,7 @@ impl ImageFileDirectory {
             x,
             y,
             predictor: self.predictor.unwrap_or(Predictor::None),
-            predictor_info: self.get_predictor_info(),
+            predictor_info: PredictorInfo::from_ifd(self),
             compressed_bytes,
             compression_method: self.compression,
             photometric_interpretation: self.photometric_interpretation,
@@ -741,6 +713,8 @@ impl ImageFileDirectory {
         reader: &dyn AsyncFileReader,
     ) -> AsyncTiffResult<Vec<Tile>> {
         assert_eq!(x.len(), y.len(), "x and y should have same len");
+
+        let predictor_info = PredictorInfo::from_ifd(self);
 
         // 1: Get all the byte ranges for all tiles
         let byte_ranges = x
@@ -762,7 +736,7 @@ impl ImageFileDirectory {
                 x,
                 y,
                 predictor: self.predictor.unwrap_or(Predictor::None),
-                predictor_info: self.get_predictor_info(),
+                predictor_info,
                 compressed_bytes,
                 compression_method: self.compression,
                 photometric_interpretation: self.photometric_interpretation,
