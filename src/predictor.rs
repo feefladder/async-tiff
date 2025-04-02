@@ -34,7 +34,7 @@ impl Unpredict for NoPredictor {
         fix_endianness(
             &mut res[..],
             predictor_info.endianness,
-            predictor_info.bits_per_sample[0],
+            predictor_info.bits_per_sample,
         );
         Ok(res.into())
     }
@@ -54,7 +54,7 @@ impl Unpredict for HorizontalPredictor {
     ) -> AsyncTiffResult<Bytes> {
         let output_row_stride = predictor_info.output_row_stride(tile_x)?;
         let samples = predictor_info.samples_per_pixel as usize;
-        let bit_depth = predictor_info.bits_per_sample[0];
+        let bit_depth = predictor_info.bits_per_sample;
 
         let mut res = BytesMut::from(buffer);
         fix_endianness(&mut res[..], predictor_info.endianness, bit_depth);
@@ -152,7 +152,7 @@ impl Unpredict for FloatingPointPredictor {
         let mut res: BytesMut = BytesMut::zeroed(
             output_row_stride * predictor_info.chunk_height_pixels(tile_y)? as usize,
         );
-        let bit_depth = predictor_info.bits_per_sample[0] as usize;
+        let bit_depth = predictor_info.bits_per_sample;
         if predictor_info.chunk_width_pixels(tile_x)? == predictor_info.chunk_width {
             // no special padding handling
             let mut input = BytesMut::from(buffer);
@@ -173,7 +173,7 @@ impl Unpredict for FloatingPointPredictor {
             let mut input = BytesMut::from(buffer);
 
             let input_row_stride =
-                predictor_info.chunk_width as usize * predictor_info.bits_per_pixel() / 8;
+                predictor_info.chunk_width as usize * predictor_info.bits_per_sample as usize / 8;
             for (in_buf, out_buf) in input
                 .chunks_mut(input_row_stride)
                 .zip(res.chunks_mut(output_row_stride))
@@ -297,7 +297,7 @@ mod test {
         image_height: 7,
         chunk_width: 4,
         chunk_height: 4,
-        bits_per_sample: &[8],
+        bits_per_sample: 8,
         samples_per_pixel: 1,
         planar_configuration: crate::tiff::tags::PlanarConfiguration::Chunky,
     };
@@ -379,7 +379,7 @@ mod test {
         for (x,y, input, expected) in cases {
             println!("uints littleendian");
             predictor_info.endianness = Endianness::LittleEndian;
-            predictor_info.bits_per_sample = &[8];
+            predictor_info.bits_per_sample = 8;
             assert_eq!(-1i32 as u8, 255);
             println!("testing u8");
             let buffer = Bytes::from(input.iter().map(|v| *v as u8).collect::<Vec<_>>());
@@ -387,49 +387,49 @@ mod test {
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u16, u16::MAX);
             println!("testing u16");
-            predictor_info.bits_per_sample = &[16];
+            predictor_info.bits_per_sample = 16;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u16).to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as u16).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing u32");
-            predictor_info.bits_per_sample = &[32];
+            predictor_info.bits_per_sample = 32;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u32).to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as u32).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u64, u64::MAX);
             println!("testing u64");
-            predictor_info.bits_per_sample = &[64];
+            predictor_info.bits_per_sample = 64;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u64).to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as u64).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
 
             println!("ints littleendian");
-            predictor_info.bits_per_sample = &[8];
+            predictor_info.bits_per_sample = 8;
             println!("testing i8");
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i8).to_le_bytes()).collect::<Vec<_>>());
             println!("{:?}", &buffer[..]);
             let res = Bytes::from(expected.clone());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap()[..], res[..]);
             println!("testing i16");
-            predictor_info.bits_per_sample = &[16];
+            predictor_info.bits_per_sample = 16;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i16).to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i16).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             println!("testing i32");
-            predictor_info.bits_per_sample = &[32];
+            predictor_info.bits_per_sample = 32;
             let buffer = Bytes::from(input.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             println!("testing i64");
-            predictor_info.bits_per_sample = &[64];
+            predictor_info.bits_per_sample = 64;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i64).to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i64).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
 
             println!("uints bigendian");
             predictor_info.endianness = Endianness::BigEndian;
-            predictor_info.bits_per_sample = &[8];
+            predictor_info.bits_per_sample = 8;
             assert_eq!(-1i32 as u8, 255);
             println!("testing u8");
             let buffer = Bytes::from(input.iter().map(|v| *v as u8).collect::<Vec<_>>());
@@ -437,26 +437,26 @@ mod test {
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u16, u16::MAX);
             println!("testing u16");
-            predictor_info.bits_per_sample = &[16];
+            predictor_info.bits_per_sample = 16;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u16).to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as u16).to_ne_bytes()).collect::<Vec<_>>());
             println!("buffer: {:?}", &buffer[..]);
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap()[..], res[..]);
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing u32");
-            predictor_info.bits_per_sample = &[32];
+            predictor_info.bits_per_sample = 32;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u32).to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as u32).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u64, u64::MAX);
             println!("testing u64");
-            predictor_info.bits_per_sample = &[64];
+            predictor_info.bits_per_sample = 64;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u64).to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as u64).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
 
             println!("ints bigendian");
-            predictor_info.bits_per_sample = &[8];
+            predictor_info.bits_per_sample = 8;
             assert_eq!(-1i32 as u8, 255);
             println!("testing i8");
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i8).to_be_bytes()).collect::<Vec<_>>());
@@ -464,19 +464,19 @@ mod test {
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u16, u16::MAX);
             println!("testing i16");
-            predictor_info.bits_per_sample = &[16];
+            predictor_info.bits_per_sample = 16;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i16).to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i16).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing i32");
-            predictor_info.bits_per_sample = &[32];
+            predictor_info.bits_per_sample = 32;
             let buffer = Bytes::from(input.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u64, u64::MAX);
             println!("testing i64");
-            predictor_info.bits_per_sample = &[64];
+            predictor_info.bits_per_sample = 64;
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i64).to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i64).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
@@ -501,7 +501,7 @@ mod test {
             image_height: 4+1,
             chunk_width: 4,
             chunk_height: 4,
-            bits_per_sample: &[16],
+            bits_per_sample: 16,
             samples_per_pixel: 1,
             planar_configuration: PlanarConfiguration::Chunky,
         };
@@ -530,7 +530,7 @@ mod test {
             image_height: 4+1,
             chunk_width: 4,
             chunk_height: 4,
-            bits_per_sample: &[16],
+            bits_per_sample: 16,
             samples_per_pixel: 1,
             planar_configuration: PlanarConfiguration::Chunky,
         };
@@ -558,7 +558,7 @@ mod test {
             image_height: 2 + 1,
             chunk_width: 2,
             chunk_height: 2,
-            bits_per_sample: &[32],
+            bits_per_sample: 32,
             samples_per_pixel: 1,
             planar_configuration: PlanarConfiguration::Chunky,
         };
@@ -592,7 +592,7 @@ mod test {
             image_height: 2 + 1,
             chunk_width: 2,
             chunk_height: 2,
-            bits_per_sample: &[64],
+            bits_per_sample: 64,
             samples_per_pixel: 1,
             planar_configuration: PlanarConfiguration::Chunky,
         };

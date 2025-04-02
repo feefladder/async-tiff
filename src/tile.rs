@@ -17,7 +17,7 @@ use crate::tiff::{TiffError, TiffUnsupportedError};
 /// Also provides convenience functions
 ///
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PredictorInfo<'a> {
+pub(crate) struct PredictorInfo {
     /// endianness
     pub(crate) endianness: Endianness,
     /// width of the image in pixels
@@ -30,10 +30,10 @@ pub(crate) struct PredictorInfo<'a> {
     pub(crate) chunk_width: u32,
     /// chunk height in pixels
     pub(crate) chunk_height: u32,
-    /// bits per sample, as an array
+    /// bits per sample
     ///
-    /// Can also be a single value, in which case it applies to all samples
-    pub(crate) bits_per_sample: &'a [u16], // maybe say that we only support a single bits_per_sample?
+    /// We only support a single bits_per_sample across all samples
+    pub(crate) bits_per_sample: u16,
     /// number of samples per pixel
     pub(crate) samples_per_pixel: u16,
     /// planar configuration
@@ -42,7 +42,7 @@ pub(crate) struct PredictorInfo<'a> {
     pub(crate) planar_configuration: PlanarConfiguration,
 }
 
-impl PredictorInfo<'_> {
+impl PredictorInfo {
     /// chunk width in pixels, taking padding into account
     ///
     /// strips are considered image-width chunks
@@ -125,29 +125,30 @@ impl PredictorInfo<'_> {
 
     /// get the output row stride in bytes, taking padding into account
     pub fn output_row_stride(&self, x: u32) -> AsyncTiffResult<usize> {
-        Ok((self.chunk_width_pixels(x)? as usize).saturating_mul(self.bits_per_pixel()) / 8)
+        Ok((self.chunk_width_pixels(x)? as usize).saturating_mul(self.bits_per_sample as _) / 8)
     }
 
-    /// The total number of bits per pixel, taking into account possible different sample sizes
-    ///
-    /// Technically bits_per_sample.len() should be *equal* to samples, but libtiff also allows
-    /// it to be a single value that applies to all samples.
-    ///
-    /// Libtiff and image-tiff do not support mixed bits per sample, but we give the possibility
-    /// unless you also have PlanarConfiguration::Planar, at which point the first is taken
-    pub fn bits_per_pixel(&self) -> usize {
-        match self.planar_configuration {
-            PlanarConfiguration::Chunky => {
-                if self.bits_per_sample.len() == 1 {
-                    self.samples_per_pixel as usize * self.bits_per_sample[0] as usize
-                } else {
-                    assert_eq!(self.samples_per_pixel as usize, self.bits_per_sample.len());
-                    self.bits_per_sample.iter().map(|v| *v as usize).product()
-                }
-            }
-            PlanarConfiguration::Planar => self.bits_per_sample[0] as usize,
-        }
-    }
+    // /// The total number of bits per pixel, taking into account possible different sample sizes
+    // ///
+    // /// Technically bits_per_sample.len() should be *equal* to samples, but libtiff also allows
+    // /// it to be a single value that applies to all samples.
+    // ///
+    // /// Libtiff and image-tiff do not support mixed bits per sample, but we give the possibility
+    // /// unless you also have PlanarConfiguration::Planar, at which point the first is taken
+    // pub fn bits_per_pixel(&self) -> usize {
+    //     self.bits_per_sample
+    //     match self.planar_configuration {
+    //         PlanarConfiguration::Chunky => {
+    //             if self.bits_per_sample.len() == 1 {
+    //                 self.samples_per_pixel as usize * self.bits_per_sample[0] as usize
+    //             } else {
+    //                 assert_eq!(self.samples_per_pixel as usize, self.bits_per_sample.len());
+    //                 self.bits_per_sample.iter().map(|v| *v as usize).product()
+    //             }
+    //         }
+    //         PlanarConfiguration::Planar => self.bits_per_sample[0] as usize,
+    //     }
+    // }
 
     /// The number of chunks in the horizontal (x) direction
     pub fn chunks_across(&self) -> u32 {
@@ -167,18 +168,18 @@ impl PredictorInfo<'_> {
 ///
 /// This is returned by `fetch_tile`.
 #[derive(Debug)]
-pub struct Tile<'a> {
+pub struct Tile {
     pub(crate) x: usize,
     pub(crate) y: usize,
     pub(crate) predictor: Predictor,
-    pub(crate) predictor_info: PredictorInfo<'a>,
+    pub(crate) predictor_info: PredictorInfo,
     pub(crate) compressed_bytes: Bytes,
     pub(crate) compression_method: CompressionMethod,
     pub(crate) photometric_interpretation: PhotometricInterpretation,
     pub(crate) jpeg_tables: Option<Bytes>,
 }
 
-impl Tile<'_> {
+impl Tile {
     /// The column index of this tile.
     pub fn x(&self) -> usize {
         self.x
@@ -268,11 +269,10 @@ mod test {
             image_height: 17,
             chunk_width: 8,
             chunk_height: 8,
-            bits_per_sample: &[8],
+            bits_per_sample: 8,
             samples_per_pixel: 1,
             planar_configuration: PlanarConfiguration::Chunky,
         };
-        assert_eq!(info.bits_per_pixel(), 8);
         assert_eq!(info.chunks_across(), 2);
         assert_eq!(info.chunks_down(), 3);
         assert_eq!(info.chunk_width_pixels(0).unwrap(), info.chunk_width);

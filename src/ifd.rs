@@ -682,6 +682,10 @@ impl ImageFileDirectory {
     }
 
     fn get_predictor_info(&self) -> PredictorInfo {
+        if !self.bits_per_sample.windows(2).all(|w| w[0] == w[1]) {
+            panic!("bits_per_sample should be the same for all channels");
+        }
+
         PredictorInfo {
             endianness: self.endianness,
             image_width: self.image_width,
@@ -698,7 +702,7 @@ impl ImageFileDirectory {
             } else {
                 self.tile_height.unwrap()
             },
-            bits_per_sample: &self.bits_per_sample,
+            bits_per_sample: self.bits_per_sample[0],
             samples_per_pixel: self.samples_per_pixel,
             planar_configuration: self.planar_configuration,
         }
