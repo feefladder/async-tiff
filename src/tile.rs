@@ -69,15 +69,16 @@ impl PredictorInfo<'_> {
     /// # planar_configuration: PlanarConfiguration::Chunky,
     /// };
     ///
+    /// assert_eq!(info.chunk_width_pixels(0).unwrap(), (8));
     /// assert_eq!(info.chunk_width_pixels(1).unwrap(), (7));
     /// info.chunk_width_pixels(2).unwrap_err();
     /// ```
     pub fn chunk_width_pixels(&self, x: u32) -> AsyncTiffResult<u32> {
         if x >= self.chunks_across() {
-            return Err(crate::error::AsyncTiffError::TileIndexError(
+            Err(crate::error::AsyncTiffError::TileIndexError(
                 x,
                 self.chunks_across(),
-            ));
+            ))
         } else if x == self.chunks_across() - 1 {
             // last chunk
             Ok(self.image_width - self.chunk_width * x)
@@ -108,6 +109,7 @@ impl PredictorInfo<'_> {
     /// # planar_configuration: PlanarConfiguration::Chunky,
     /// };
     ///
+    /// assert_eq!(info.chunk_height_pixels(0).unwrap(), (8));
     /// assert_eq!(info.chunk_height_pixels(1).unwrap(), (7));
     /// info.chunk_height_pixels(2).unwrap_err();
     /// ```
