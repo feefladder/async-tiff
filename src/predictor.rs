@@ -1,7 +1,7 @@
+//! Predictors for no predictor, horizontal and floating-point
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use byteorder::NativeEndian;
 use bytes::{Bytes, BytesMut};
 // use tiff::decoder::DecodingResult;
 
@@ -524,8 +524,11 @@ mod test {
     #[test]
     fn test_fpredict_f32() {
         // let's take this 2-value image
-        let expected: Vec<u8> = [42.0f32, 43.0].iter().flat_map(|f| f.to_le_bytes()).collect();
-        assert_eq!(expected, vec![0x0,0x0,0x28,0x42,0x0,0x0,0x2c,0x42]);
+        let expected: Vec<u8> = [42.0f32, 43.0]
+            .iter()
+            .flat_map(|f| f.to_le_bytes())
+            .collect();
+        assert_eq!(expected, vec![0x0, 0x0, 0x28, 0x42, 0x0, 0x0, 0x2c, 0x42]);
         let info = PredictorInfo {
             endianness: Endianness::LittleEndian,
             image_width: 2,

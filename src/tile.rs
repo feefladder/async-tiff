@@ -18,25 +18,45 @@ use crate::tiff::{TiffError, TiffUnsupportedError};
 ///
 #[derive(Debug, Clone, Copy)]
 pub struct PredictorInfo<'a> {
+    /// endianness
     pub endianness: Endianness,
+    /// width of the image in pixels
     pub image_width: u32,
+    /// height of the image in pixels
     pub image_height: u32,
+    /// chunk width in pixels
+    ///
+    /// If this is a stripped tiff, `chunk_width=image_width`
     pub chunk_width: u32,
+    /// chunk height in pixels
     pub chunk_height: u32,
+    /// bits per sample, as an array
+    ///
+    /// Can also be a single value, in which case it applies to all samples
     pub bits_per_sample: &'a [u16], // maybe say that we only support a single bits_per_sample?
+    /// number of samples per pixel
     pub samples_per_pixel: u16,
+    /// sample format for each sample
+    ///
+    /// There is no decoding implementation in this crate (or libtiff) for mixed sample formats
     pub sample_format: &'a [SampleFormat], // and a single sample_format?
+    /// planar configuration
+    ///
+    /// determines the bits per pixel
     pub planar_configuration: PlanarConfiguration,
 }
 
 impl PredictorInfo<'_> {
-    /// chunk height in pixels, taking padding into account
+    /// chunk width in pixels, taking padding into account
     ///
     /// strips are considered image-width chunks
     ///
     /// # Example
     ///
     /// ```rust
+    /// # use async_tiff::tiff::tags::{SampleFormat, PlanarConfiguration};
+    /// # use async_tiff::reader::Endianness;
+    /// # use async_tiff::PredictorInfo;
     /// let info = PredictorInfo {
     /// # endianness: Endianness::LittleEndian,
     ///   image_width: 15,
@@ -47,10 +67,10 @@ impl PredictorInfo<'_> {
     /// # samples_per_pixel: 1,
     /// # sample_format: &[SampleFormat::IEEEFP],
     /// # planar_configuration: PlanarConfiguration::Chunky,
-    /// }
+    /// };
     ///
-    /// assert_eq!(info.chunk_width_pixels(1).unwrap(), (7))
-    /// info.chunk_width_pixels(2).unwrap_err()
+    /// assert_eq!(info.chunk_width_pixels(1).unwrap(), (7));
+    /// info.chunk_width_pixels(2).unwrap_err();
     /// ```
     pub fn chunk_width_pixels(&self, x: u32) -> AsyncTiffResult<u32> {
         if x >= self.chunks_across() {
@@ -66,6 +86,31 @@ impl PredictorInfo<'_> {
         }
     }
 
+    /// chunk height in pixels, taking padding into account
+    ///
+    /// strips are considered image-width chunks
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// # use async_tiff::tiff::tags::{SampleFormat, PlanarConfiguration};
+    /// # use async_tiff::reader::Endianness;
+    /// # use async_tiff::PredictorInfo;
+    /// let info = PredictorInfo {
+    /// # endianness: Endianness::LittleEndian,
+    ///   image_width: 15,
+    ///   image_height: 15,
+    ///   chunk_width: 8,
+    ///   chunk_height: 8,
+    /// # bits_per_sample: &[32],
+    /// # samples_per_pixel: 1,
+    /// # sample_format: &[SampleFormat::IEEEFP],
+    /// # planar_configuration: PlanarConfiguration::Chunky,
+    /// };
+    ///
+    /// assert_eq!(info.chunk_height_pixels(1).unwrap(), (7));
+    /// info.chunk_height_pixels(2).unwrap_err();
+    /// ```
     pub fn chunk_height_pixels(&self, y: u32) -> AsyncTiffResult<u32> {
         if y >= self.chunks_down() {
             Err(crate::error::AsyncTiffError::TileIndexError(
@@ -91,19 +136,27 @@ impl PredictorInfo<'_> {
     /// it to be a single value that applies to all samples.
     ///
     /// Libtiff and image-tiff do not support mixed bits per sample, but we give the possibility
+    /// unless you also have PlanarConfiguration::Planar, at which point the first is taken
     pub fn bits_per_pixel(&self) -> usize {
-        if self.bits_per_sample.len() == 1 {
-            self.samples_per_pixel as usize * self.bits_per_sample[0] as usize
-        } else {
-            assert_eq!(self.samples_per_pixel as usize, self.bits_per_sample.len());
-            self.bits_per_sample.iter().map(|v| *v as usize).product()
+        match self.planar_configuration {
+            PlanarConfiguration::Chunky => {
+                if self.bits_per_sample.len() == 1 {
+                    self.samples_per_pixel as usize * self.bits_per_sample[0] as usize
+                } else {
+                    assert_eq!(self.samples_per_pixel as usize, self.bits_per_sample.len());
+                    self.bits_per_sample.iter().map(|v| *v as usize).product()
+                }
+            }
+            PlanarConfiguration::Planar => self.bits_per_sample[0] as usize,
         }
     }
 
+    /// The number of chunks in the horizontal (x) direction
     pub fn chunks_across(&self) -> u32 {
         self.image_width.div_ceil(self.chunk_width)
     }
 
+    /// The number of chunks in the vertical (y) direction
     pub fn chunks_down(&self) -> u32 {
         self.image_height.div_ceil(self.chunk_height)
     }
