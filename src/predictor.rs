@@ -4,6 +4,7 @@ use std::fmt::Debug;
 use bytes::{Bytes, BytesMut};
 
 use crate::error::AsyncTiffError;
+use crate::tiff::tags::PlanarConfiguration;
 use crate::ImageFileDirectory;
 use crate::{error::AsyncTiffResult, reader::Endianness};
 
@@ -34,6 +35,8 @@ pub(crate) struct PredictorInfo {
     bits_per_sample: u16,
     /// number of samples per pixel
     samples_per_pixel: u16,
+
+    planar_configuration: PlanarConfiguration,
 }
 
 impl PredictorInfo {
@@ -60,15 +63,7 @@ impl PredictorInfo {
             image_height: ifd.image_height,
             chunk_width,
             chunk_height,
-            // TODO: validate this? Restore handling for different PlanarConfiguration?
-            // PlanarConfiguration::Chunky => {
-            //     if self.bits_per_sample.len() == 1 {
-            //         self.samples_per_pixel as usize * self.bits_per_sample[0] as usize
-            //     } else {
-            //         assert_eq!(self.samples_per_pixel as usize, self.bits_per_sample.len());
-            //         self.bits_per_sample.iter().map(|v| *v as usize).product()
-            //     }
-            // }
+            planar_configuration: ifd.planar_configuration,
             bits_per_sample: ifd.bits_per_sample[0],
             samples_per_pixel: ifd.samples_per_pixel,
         }
@@ -106,7 +101,27 @@ impl PredictorInfo {
 
     /// get the output row stride in bytes, taking padding into account
     fn output_row_stride(&self, x: u32) -> AsyncTiffResult<usize> {
-        Ok((self.chunk_width_pixels(x)? as usize).saturating_mul(self.bits_per_sample as _) / 8)
+        Ok((self.chunk_width_pixels(x)? as usize).saturating_mul(self.bits_per_pixel()) / 8)
+    }
+
+    /// the number of rows the output has, taking padding and PlanarConfiguration into account.
+    fn output_rows(&self, y: u32) -> AsyncTiffResult<usize> {
+        match self.planar_configuration {
+            PlanarConfiguration::Chunky => Ok(self.chunk_height_pixels(y)? as usize),
+            PlanarConfiguration::Planar => {
+                Ok((self.chunk_height_pixels(y)? as usize)
+                    .saturating_mul(self.samples_per_pixel as _))
+            }
+        }
+    }
+
+    fn bits_per_pixel(&self) -> usize {
+        match self.planar_configuration {
+            PlanarConfiguration::Chunky => {
+                self.bits_per_sample as usize * self.samples_per_pixel as usize
+            }
+            PlanarConfiguration::Planar => self.bits_per_sample as usize,
+        }
     }
 
     /// The number of chunks in the horizontal (x) direction
@@ -275,9 +290,8 @@ impl Unpredict for FloatingPointPredictor {
         tile_y: u32,
     ) -> AsyncTiffResult<Bytes> {
         let output_row_stride = predictor_info.output_row_stride(tile_x)?;
-        let mut res: BytesMut = BytesMut::zeroed(
-            output_row_stride * predictor_info.chunk_height_pixels(tile_y)? as usize,
-        );
+        let mut res: BytesMut =
+            BytesMut::zeroed(output_row_stride * predictor_info.output_rows(tile_y)? as usize);
         let bit_depth = predictor_info.bits_per_sample;
         if predictor_info.chunk_width_pixels(tile_x)? == predictor_info.chunk_width {
             // no special padding handling
@@ -420,6 +434,7 @@ mod test {
         chunk_height: 4,
         bits_per_sample: 8,
         samples_per_pixel: 1,
+        planar_configuration: PlanarConfiguration::Chunky,
     };
     #[rustfmt::skip]
     const RES: [u8;16] = [
@@ -454,23 +469,44 @@ mod test {
 
     #[test]
     fn test_chunk_width_pixels() {
-        let info = PredictorInfo {
-            endianness: Endianness::LittleEndian,
-            image_width: 15,
-            image_height: 17,
-            chunk_width: 8,
-            chunk_height: 8,
-            bits_per_sample: 8,
-            samples_per_pixel: 1,
-        };
+        let info = PRED_INFO;
         assert_eq!(info.chunks_across(), 2);
-        assert_eq!(info.chunks_down(), 3);
+        assert_eq!(info.chunks_down(), 2);
         assert_eq!(info.chunk_width_pixels(0).unwrap(), info.chunk_width);
-        assert_eq!(info.chunk_width_pixels(1).unwrap(), 7);
+        assert_eq!(info.chunk_width_pixels(1).unwrap(), 3);
         info.chunk_width_pixels(2).unwrap_err();
         assert_eq!(info.chunk_height_pixels(0).unwrap(), info.chunk_height);
-        assert_eq!(info.chunk_height_pixels(2).unwrap(), 1);
-        info.chunk_height_pixels(3).unwrap_err();
+        assert_eq!(info.chunk_height_pixels(1).unwrap(), 3);
+        info.chunk_height_pixels(2).unwrap_err();
+    }
+
+    #[test]
+    fn test_output_row_stride() {
+        let mut info = PRED_INFO;
+        assert_eq!(info.output_row_stride(0).unwrap(), 4);
+        assert_eq!(info.output_row_stride(1).unwrap(), 3);
+        info.output_row_stride(2).unwrap_err();
+        info.samples_per_pixel = 2;
+        assert_eq!(info.output_row_stride(0).unwrap(), 8);
+        assert_eq!(info.output_row_stride(1).unwrap(), 6);
+        info.bits_per_sample = 16;
+        assert_eq!(info.output_row_stride(0).unwrap(), 16);
+        assert_eq!(info.output_row_stride(1).unwrap(), 12);
+        info.planar_configuration = PlanarConfiguration::Planar;
+        assert_eq!(info.output_row_stride(0).unwrap(), 8);
+        assert_eq!(info.output_row_stride(1).unwrap(), 6);
+    }
+
+    #[test]
+    fn test_output_rows() {
+        let mut info = PRED_INFO;
+        info.samples_per_pixel = 2;
+        assert_eq!(info.output_rows(0).unwrap(), 4);
+        assert_eq!(info.output_rows(1).unwrap(), 3);
+        info.output_rows(2).unwrap_err();
+        info.planar_configuration = PlanarConfiguration::Planar;
+        assert_eq!(info.output_rows(0).unwrap(), 8);
+        assert_eq!(info.output_rows(1).unwrap(), 6);
     }
 
     #[rustfmt::skip]
@@ -644,6 +680,7 @@ mod test {
             chunk_height: 4,
             bits_per_sample: 16,
             samples_per_pixel: 1,
+            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
@@ -672,6 +709,7 @@ mod test {
             chunk_height: 4,
             bits_per_sample: 16,
             samples_per_pixel: 1,
+            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
@@ -699,6 +737,7 @@ mod test {
             chunk_height: 2,
             bits_per_sample: 32,
             samples_per_pixel: 1,
+            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
@@ -732,6 +771,7 @@ mod test {
             chunk_height: 2,
             bits_per_sample: 64,
             samples_per_pixel: 1,
+            planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
