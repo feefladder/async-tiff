@@ -109,6 +109,8 @@ impl RevPredict for RevHorizontalPredictor {
 /// Reverse predictor convenienve function for horizontal differencing
 ///
 /// From image-tiff
+///
+/// This should be used _after_ endianness fixing
 pub fn rev_hpredict_nsamp(buf: &mut [u8], bit_depth: u16, samples: usize) {
     match bit_depth {
         0..=8 => {
@@ -203,7 +205,7 @@ impl RevPredict for RevFloatingPointPredictor {
                     16 => rev_predict_f16(in_buf, out_buf, predictor_info.samples_per_pixel as _),
                     32 => rev_predict_f32(in_buf, out_buf, predictor_info.samples_per_pixel as _),
                     64 => rev_predict_f64(in_buf, out_buf, predictor_info.samples_per_pixel as _),
-                    _ => panic!("thou shalt not predict with float16"),
+                    _ => panic!("thou shalt not predict f24"),
                 }
             }
         } else {
@@ -219,15 +221,18 @@ impl RevPredict for RevFloatingPointPredictor {
             {
                 let mut out_row = BytesMut::zeroed(input_row_stride);
                 match bit_depth {
-                    16 => rev_predict_f16(in_buf, out_buf, predictor_info.samples_per_pixel as _),
+                    16 => {
+                        rev_predict_f16(in_buf, &mut out_row, predictor_info.samples_per_pixel as _)
+                    }
                     32 => {
                         rev_predict_f32(in_buf, &mut out_row, predictor_info.samples_per_pixel as _)
                     }
                     64 => {
                         rev_predict_f64(in_buf, &mut out_row, predictor_info.samples_per_pixel as _)
                     }
-                    _ => panic!("thou shalt not predict f16"),
+                    _ => panic!("thou shalt not predict f24"),
                 }
+                // remove the padding bytes
                 out_buf.copy_from_slice(&out_row[..output_row_stride]);
             }
         }
@@ -250,7 +255,7 @@ pub fn rev_predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
     for (i, chunk) in output.chunks_mut(2).enumerate() {
         chunk.copy_from_slice(&u16::to_ne_bytes(
             // convert to native-endian
-            // preserve original byte-order
+            // floating predictor is be-like
             u16::from_be_bytes([input[i], input[input.len() / 2 + i]]),
         ));
     }
@@ -267,20 +272,20 @@ pub fn rev_predict_f32(input: &mut [u8], output: &mut [u8], samples: usize) {
     for i in samples..input.len() {
         input[i] = input[i].wrapping_add(input[i - samples]);
     }
-    println!("output: {output:?}, {:?}", output.len());
     // reverse byte shuffle and fix endianness
     for (i, chunk) in output.chunks_mut(4).enumerate() {
-        println!("i:{i:?}");
-        chunk.copy_from_slice(&u32::to_ne_bytes(
+        chunk.copy_from_slice(
             // convert to native-endian
-            // preserve original byte-order
-            u32::from_be_bytes([
-                input[i],
-                input[input.len() / 4 + i],
-                input[input.len() / 4 * 2 + i],
-                input[input.len() / 4 * 3 + i],
-            ]),
-        ));
+            &u32::to_ne_bytes(
+                // floating predictor is be-like
+                u32::from_be_bytes([
+                    input[i],
+                    input[input.len() / 4 + i],
+                    input[input.len() / 4 * 2 + i],
+                    input[input.len() / 4 * 3 + i],
+                ]),
+            ),
+        );
     }
 }
 
@@ -295,16 +300,22 @@ pub fn rev_predict_f64(input: &mut [u8], output: &mut [u8], samples: usize) {
     }
 
     for (i, chunk) in output.chunks_mut(8).enumerate() {
-        chunk.copy_from_slice(&u64::to_ne_bytes(u64::from_be_bytes([
-            input[i],
-            input[input.len() / 8 + i],
-            input[input.len() / 8 * 2 + i],
-            input[input.len() / 8 * 3 + i],
-            input[input.len() / 8 * 4 + i],
-            input[input.len() / 8 * 5 + i],
-            input[input.len() / 8 * 6 + i],
-            input[input.len() / 8 * 7 + i],
-        ])));
+        chunk.copy_from_slice(
+            // convert to native-endian
+            &u64::to_ne_bytes(
+                // floating predictor is be-like
+                u64::from_be_bytes([
+                    input[i],
+                    input[input.len() / 8 + i],
+                    input[input.len() / 8 * 2 + i],
+                    input[input.len() / 8 * 3 + i],
+                    input[input.len() / 8 * 4 + i],
+                    input[input.len() / 8 * 5 + i],
+                    input[input.len() / 8 * 6 + i],
+                    input[input.len() / 8 * 7 + i],
+                ]),
+            ),
+        );
     }
 }
 
@@ -384,7 +395,7 @@ mod test {
     #[test]
     fn test_hpredict() {
         let p = RevHorizontalPredictor;
-        let mut predictor_info = PRED_INFO.clone();
+        let mut predictor_info = PRED_INFO;
         let cases = [
             (0,0, vec![
                 0i32, 1, 1, 1,
@@ -453,7 +464,7 @@ mod test {
             assert_eq!(p.rev_predict_fix_endianness(buffer, &predictor_info, x, y).unwrap(), res);
             println!("testing i32");
             predictor_info.bits_per_sample = &[32];
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i32).to_le_bytes()).collect::<Vec<_>>());
+            let buffer = Bytes::from(input.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.rev_predict_fix_endianness(buffer, &predictor_info, x, y).unwrap(), res);
             println!("testing i64");
@@ -508,7 +519,7 @@ mod test {
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing i32");
             predictor_info.bits_per_sample = &[32];
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i32).to_be_bytes()).collect::<Vec<_>>());
+            let buffer = Bytes::from(input.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>());
             let res = Bytes::from(expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>());
             assert_eq!(p.rev_predict_fix_endianness(buffer, &predictor_info, x, y).unwrap(), res);
             assert_eq!(-1i32 as u64, u64::MAX);
@@ -520,16 +531,78 @@ mod test {
         }
     }
 
-    // #[rustfmt::skip]
+    #[rustfmt::skip]
+    #[test]
+    fn test_predict_f16() {
+        // take a 4-value image
+        let expect_le = [1,0,3,2,5,4,7,6u8];
+        let _expected = [0,1,2,3,4,5,6,7u8];
+        //                              0       1
+        //                            0       1
+        //                          0       1
+        //                        0       1
+        let _shuffled = [0,2,4,6,1,3,5,7u8];  
+        let diffed = [0,2,2,2,251,2,2,2];
+        let info = PredictorInfo {
+            endianness: Endianness::LittleEndian,
+            image_width: 4+4,
+            image_height: 4+1,
+            chunk_width: 4,
+            chunk_height: 4,
+            bits_per_sample: &[16],
+            samples_per_pixel: 1,
+            sample_format: &[SampleFormat::IEEEFP],
+            planar_configuration: PlanarConfiguration::Chunky,
+        };
+        let input = Bytes::from_owner(diffed);
+        assert_eq!(
+            &RevFloatingPointPredictor.rev_predict_fix_endianness(input, &info, 1, 1).unwrap()[..],
+            &expect_le[..]
+        )
+    }
+
+    #[rustfmt::skip]
+    #[test]
+    fn test_predict_f16_padding() {
+        // take a 4-pixel image with 2 padding pixels
+        let expect_le = [1,0,3,2u8]; // no padding
+        let _expected = [0,1,2,3,0,0,0,0u8]; //padding added
+        //                              0       1
+        //                            0       1
+        //                          0       1
+        //                        0       1
+        let _shuffled = [0,2,0,0,1,3,0,0u8];
+        let diffed = [0,2,254,0,1,2,253,0];
+        let info = PredictorInfo {
+            endianness: Endianness::LittleEndian,
+            image_width: 4+2,
+            image_height: 4+1,
+            chunk_width: 4,
+            chunk_height: 4,
+            bits_per_sample: &[16],
+            samples_per_pixel: 1,
+            sample_format: &[SampleFormat::IEEEFP],
+            planar_configuration: PlanarConfiguration::Chunky,
+        };
+        let input = Bytes::from_owner(diffed);
+        assert_eq!(
+            &RevFloatingPointPredictor.rev_predict_fix_endianness(input, &info, 1, 1).unwrap()[..],
+            &expect_le[..]
+        )
+    }
+
+    #[rustfmt::skip]
     #[test]
     fn test_fpredict_f32() {
-        // let's take this 2-value image
-        let expected: Vec<u8> = [42.0f32, 43.0]
-            .iter()
-            .flat_map(|f| f.to_le_bytes())
-            .collect();
-        assert_eq!(expected, vec![0x0, 0x0, 0x28, 0x42, 0x0, 0x0, 0x2c, 0x42]);
-        let info = PredictorInfo {
+        // let's take this 2-value image where we only look at bytes
+        let expect_le  = [3,2,  1,0,  7,6,  5,4];
+        let _expected  = [0,1,  2,3,  4,5,  6,7u8];
+        //                           0     1     2     3   \_ de-shuffling indices
+        //                         0     1     2     3     /  (the one the function uses)
+        let _shuffled  = [0,4,  1,5,  2,6,  3,7u8];
+        let diffed     = [0,4,253,4,253,4,253,4u8];
+        println!("expected: {expect_le:?}");
+        let mut info = PredictorInfo {
             endianness: Endianness::LittleEndian,
             image_width: 2,
             image_height: 2 + 1,
@@ -540,37 +613,47 @@ mod test {
             sample_format: &[SampleFormat::IEEEFP],
             planar_configuration: PlanarConfiguration::Chunky,
         };
-        let input = Bytes::from_static(&[0x42u8, 0, 230, 4, 212, 0, 0, 0]);
+        let input = Bytes::from_owner(diffed);
         assert_eq!(
-            RevFloatingPointPredictor
-                .rev_predict_fix_endianness(input, &info, 0, 1)
-                .unwrap(),
-            expected
+            &RevFloatingPointPredictor
+                .rev_predict_fix_endianness(input.clone(), &info, 0, 1).unwrap()[..],
+            &expect_le
         );
+        info.endianness = Endianness::BigEndian;
+        assert_eq!(
+            &RevFloatingPointPredictor.rev_predict_fix_endianness(input, &info, 0, 1).unwrap()[..],
+            &expect_le
+        )
     }
 
-    // #[test]
-    // fn test_fpredict_f64() {
-    //     // let's take this 2-value image
-    //     let expected: Vec<u8> = [42.0f64, 43.0].iter().flat_map(|f| f.to_le_bytes()).collect();
-    //     assert_eq!(expected, vec![0,0,0,0,0,0,69,64,0,0,0,0,0,128,69,64]);
-    //     let info = PredictorInfo {
-    //         endianness: Endianness::LittleEndian,
-    //         image_width: 2,
-    //         image_height: 2 + 1,
-    //         chunk_width: 2,
-    //         chunk_height: 2,
-    //         bits_per_sample: &[64],
-    //         samples_per_pixel: 1,
-    //         sample_format: &[SampleFormat::IEEEFP],
-    //         planar_configuration: PlanarConfiguration::Chunky,
-    //     };
-    //     let input = Bytes::from_static(&[0x42u8, 0, 230, 4, 212, 0, 0, 0]);
-    //     assert_eq!(
-    //         RevFloatingPointPredictor
-    //             .rev_predict_fix_endianness(input, &info, 0, 1)
-    //             .unwrap(),
-    //         expected
-    //     );
-    // }
+    #[rustfmt::skip]
+    #[test]
+    fn test_fpredict_f64() {
+        assert_eq!(f64::from_le_bytes([7,6,5,4,3,2,1,0]), f64::from_bits(0x00_01_02_03_04_05_06_07));
+        // let's take this 2-value image
+        let expect_be =  [7,6,5,4,3, 2,1, 0,15,14,13,12,11,10,9,8];
+        let _expected  = [0,1,2,3,4, 5,6, 7,8, 9,10,11,12,13,14,15u8];
+        //                           0   1    2    3    4     5     6     7
+        //                         0   1   2    3    4     5     6     7
+        let _shuffled = [0,8,1,9,2,10,3,11,4,12, 5,13, 6,14, 7,15u8];
+        let diffed = [0,8,249,8,249,8,249,8,249,8,249,8,249,8,249,8u8];
+        let info = PredictorInfo {
+            endianness: Endianness::LittleEndian,
+            image_width: 2,
+            image_height: 2 + 1,
+            chunk_width: 2,
+            chunk_height: 2,
+            bits_per_sample: &[64],
+            samples_per_pixel: 1,
+            sample_format: &[SampleFormat::IEEEFP],
+            planar_configuration: PlanarConfiguration::Chunky,
+        };
+        let input = Bytes::from_owner(diffed);
+        assert_eq!(
+            &RevFloatingPointPredictor
+                .rev_predict_fix_endianness(input, &info, 0, 1)
+                .unwrap()[..],
+            &expect_be[..]
+        );
+    }
 }
