@@ -144,13 +144,11 @@ impl Unpredict for NoPredictor {
         _: u32,
         _: u32,
     ) -> AsyncTiffResult<Bytes> {
-        let mut res = BytesMut::from(buffer);
-        fix_endianness(
-            &mut res[..],
+        Ok(fix_endianness(
+            buffer,
             predictor_info.endianness,
             predictor_info.bits_per_sample,
-        );
-        Ok(res.into())
+        ))
     }
 }
 
@@ -170,8 +168,8 @@ impl Unpredict for HorizontalPredictor {
         let samples = predictor_info.samples_per_pixel as usize;
         let bit_depth = predictor_info.bits_per_sample;
 
+        let buffer = fix_endianness(buffer, predictor_info.endianness, bit_depth);
         let mut res = BytesMut::from(buffer);
-        fix_endianness(&mut res[..], predictor_info.endianness, bit_depth);
         for buf in res.chunks_mut(output_row_stride) {
             rev_hpredict_nsamp(buf, bit_depth, samples);
         }
@@ -221,33 +219,47 @@ pub fn rev_hpredict_nsamp(buf: &mut [u8], bit_depth: u16, samples: usize) {
 /// Fix endianness. If `byte_order` matches the host, then conversion is a no-op.
 ///
 /// from image-tiff
-pub fn fix_endianness(buf: &mut [u8], byte_order: Endianness, bit_depth: u16) {
+pub fn fix_endianness(buffer: Bytes, byte_order: Endianness, bit_depth: u16) -> Bytes {
     match byte_order {
-        Endianness::LittleEndian => match bit_depth {
-            0..=8 => {}
-            9..=16 => buf.chunks_exact_mut(2).for_each(|v| {
-                v.copy_from_slice(&u16::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
-            }),
-            17..=32 => buf.chunks_exact_mut(4).for_each(|v| {
-                v.copy_from_slice(&u32::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
-            }),
-            _ => buf.chunks_exact_mut(8).for_each(|v| {
-                v.copy_from_slice(&u64::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
-            }),
-        },
-        Endianness::BigEndian => match bit_depth {
-            0..=8 => {}
-            9..=16 => buf.chunks_exact_mut(2).for_each(|v| {
-                v.copy_from_slice(&u16::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
-            }),
-            17..=32 => buf.chunks_exact_mut(4).for_each(|v| {
-                v.copy_from_slice(&u32::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
-            }),
-            _ => buf.chunks_exact_mut(8).for_each(|v| {
-                v.copy_from_slice(&u64::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
-            }),
-        },
-    };
+        #[cfg(target_endian = "little")]
+        Endianness::LittleEndian => buffer,
+        #[cfg(target_endian = "big")]
+        Endianness::LittleEndian => {
+            let mut buf = BytesMut::from(buffer);
+            match bit_depth {
+                0..=8 => {}
+                9..=16 => buf.chunks_exact_mut(2).for_each(|v| {
+                    v.copy_from_slice(&u16::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
+                }),
+                17..=32 => buf.chunks_exact_mut(4).for_each(|v| {
+                    v.copy_from_slice(&u32::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
+                }),
+                _ => buf.chunks_exact_mut(8).for_each(|v| {
+                    v.copy_from_slice(&u64::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
+                }),
+            }
+            buf.freeze()
+        }
+        #[cfg(target_endian = "little")]
+        Endianness::BigEndian => {
+            let mut buf = BytesMut::from(buffer);
+            match bit_depth {
+                0..=8 => {}
+                9..=16 => buf.chunks_exact_mut(2).for_each(|v| {
+                    v.copy_from_slice(&u16::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
+                }),
+                17..=32 => buf.chunks_exact_mut(4).for_each(|v| {
+                    v.copy_from_slice(&u32::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
+                }),
+                _ => buf.chunks_exact_mut(8).for_each(|v| {
+                    v.copy_from_slice(&u64::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
+                }),
+            };
+            buf.freeze()
+        }
+        #[cfg(target_endian = "big")]
+        Endianness::BigEndian => buffer,
+    }
 }
 
 /// Floating point predictor
@@ -318,7 +330,6 @@ impl Unpredict for FloatingPointPredictor {
 /// floating point prediction first shuffles the bytes and then uses horizontal
 /// differencing
 /// also performs byte-order conversion if needed.
-///
 pub fn rev_predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
     // reverse horizontal differencing
     for i in samples..input.len() {
@@ -339,7 +350,6 @@ pub fn rev_predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
 /// floating point prediction first shuffles the bytes and then uses horizontal
 /// differencing
 /// also performs byte-order conversion if needed.
-///
 pub fn rev_predict_f32(input: &mut [u8], output: &mut [u8], samples: usize) {
     // reverse horizontal differencing
     for i in samples..input.len() {
