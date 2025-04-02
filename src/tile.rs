@@ -2,7 +2,7 @@ use bytes::Bytes;
 
 use crate::decoder::DecoderRegistry;
 use crate::error::AsyncTiffResult;
-use crate::predictor::RevPredictorRegistry;
+use crate::predictor::{FloatingPointPredictor, HorizontalPredictor, NoPredictor, RevPredict};
 use crate::reader::Endianness;
 use crate::tiff::tags::{
     CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, SampleFormat,
@@ -221,11 +221,7 @@ impl Tile<'_> {
     ///
     /// Decoding is separate from fetching so that sync and async operations do not block the same
     /// runtime.
-    pub fn decode(
-        self,
-        decoder_registry: &DecoderRegistry,
-        predictor_registry: &RevPredictorRegistry,
-    ) -> AsyncTiffResult<Bytes> {
+    pub fn decode(self, decoder_registry: &DecoderRegistry) -> AsyncTiffResult<Bytes> {
         let decoder = decoder_registry
             .as_ref()
             .get(&self.compression_method)
@@ -233,24 +229,32 @@ impl Tile<'_> {
                 TiffUnsupportedError::UnsupportedCompressionMethod(self.compression_method),
             ))?;
 
-        let predictor =
-            predictor_registry
-                .as_ref()
-                .get(&self.predictor)
-                .ok_or(TiffError::UnsupportedError(
-                    TiffUnsupportedError::UnsupportedPredictor(self.predictor),
-                ))?;
+        let decoded_tile = decoder.decode_tile(
+            self.compressed_bytes.clone(),
+            self.photometric_interpretation,
+            self.jpeg_tables.as_deref(),
+        )?;
 
-        predictor.rev_predict_fix_endianness(
-            decoder.decode_tile(
-                self.compressed_bytes.clone(),
-                self.photometric_interpretation,
-                self.jpeg_tables.as_deref(),
-            )?,
-            &self.predictor_info,
-            self.x as _,
-            self.y as _,
-        )
+        match self.predictor {
+            Predictor::None => NoPredictor.rev_predict_fix_endianness(
+                decoded_tile,
+                &self.predictor_info,
+                self.x as _,
+                self.y as _,
+            ),
+            Predictor::Horizontal => HorizontalPredictor.rev_predict_fix_endianness(
+                decoded_tile,
+                &self.predictor_info,
+                self.x as _,
+                self.y as _,
+            ),
+            Predictor::FloatingPoint => FloatingPointPredictor.rev_predict_fix_endianness(
+                decoded_tile,
+                &self.predictor_info,
+                self.x as _,
+                self.y as _,
+            ),
+        }
     }
 }
 

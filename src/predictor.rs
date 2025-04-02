@@ -1,55 +1,14 @@
 //! Predictors for no predictor, horizontal and floating-point
-use std::collections::HashMap;
 use std::fmt::Debug;
 
 use bytes::{Bytes, BytesMut};
 // use tiff::decoder::DecodingResult;
 
-use crate::{
-    error::AsyncTiffResult, reader::Endianness, tiff::tags::Predictor, tile::PredictorInfo,
-};
-
-/// A registry for reverse predictors
-///
-/// Reverse predictors, because they perform the inverse (decoding) operation of prediction
-///
-///
-///
-pub struct RevPredictorRegistry(HashMap<Predictor, Box<dyn RevPredict>>);
-
-impl RevPredictorRegistry {
-    /// create a new predictor registry with no predictors registered
-    pub fn new() -> Self {
-        Self(HashMap::new())
-    }
-}
-
-impl AsRef<HashMap<Predictor, Box<dyn RevPredict>>> for RevPredictorRegistry {
-    fn as_ref(&self) -> &HashMap<Predictor, Box<dyn RevPredict>> {
-        &self.0
-    }
-}
-
-impl Default for RevPredictorRegistry {
-    fn default() -> Self {
-        let mut hmap = HashMap::new();
-        hmap.insert(Predictor::None, Box::new(NoPredictor) as _);
-        hmap.insert(Predictor::Horizontal, Box::new(RevHorizontalPredictor) as _);
-        hmap.insert(
-            Predictor::FloatingPoint,
-            Box::new(RevFloatingPointPredictor) as _,
-        );
-        Self(hmap)
-    }
-}
+use crate::{error::AsyncTiffResult, reader::Endianness, tile::PredictorInfo};
 
 /// Trait for reverse predictors to implement
-///
-///
 pub trait RevPredict: Debug + Send + Sync {
     /// reverse predict the decompressed bytes and fix endianness on the output
-    ///
-    ///
     fn rev_predict_fix_endianness(
         &self,
         buffer: Bytes,
@@ -83,9 +42,9 @@ impl RevPredict for NoPredictor {
 
 /// reverse horizontal predictor
 #[derive(Debug)]
-pub struct RevHorizontalPredictor;
+pub struct HorizontalPredictor;
 
-impl RevPredict for RevHorizontalPredictor {
+impl RevPredict for HorizontalPredictor {
     fn rev_predict_fix_endianness(
         &self,
         buffer: Bytes,
@@ -179,9 +138,9 @@ pub fn fix_endianness(buf: &mut [u8], byte_order: Endianness, bit_depth: u16) {
 
 /// Floating point predictor
 #[derive(Debug)]
-pub struct RevFloatingPointPredictor;
+pub struct FloatingPointPredictor;
 
-impl RevPredict for RevFloatingPointPredictor {
+impl RevPredict for FloatingPointPredictor {
     fn rev_predict_fix_endianness(
         &self,
         buffer: Bytes,
@@ -243,7 +202,7 @@ impl RevPredict for RevFloatingPointPredictor {
 /// Reverse floating point prediction
 ///
 /// floating point prediction first shuffles the bytes and then uses horizontal
-/// differencing  
+/// differencing
 /// also performs byte-order conversion if needed.
 ///
 pub fn rev_predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
@@ -264,7 +223,7 @@ pub fn rev_predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
 /// Reverse floating point prediction
 ///
 /// floating point prediction first shuffles the bytes and then uses horizontal
-/// differencing  
+/// differencing
 /// also performs byte-order conversion if needed.
 ///
 pub fn rev_predict_f32(input: &mut [u8], output: &mut [u8], samples: usize) {
@@ -292,7 +251,7 @@ pub fn rev_predict_f32(input: &mut [u8], output: &mut [u8], samples: usize) {
 /// Reverse floating point prediction
 ///
 /// floating point prediction first shuffles the bytes and then uses horizontal
-/// differencing  
+/// differencing
 /// Also fixes byte order if needed (tiff's->native)
 pub fn rev_predict_f64(input: &mut [u8], output: &mut [u8], samples: usize) {
     for i in samples..input.len() {
@@ -326,13 +285,13 @@ mod test {
     use bytes::Bytes;
 
     use crate::{
-        predictor::RevFloatingPointPredictor,
+        predictor::FloatingPointPredictor,
         reader::Endianness,
         tiff::tags::{PlanarConfiguration, SampleFormat},
         tile::PredictorInfo,
     };
 
-    use super::{NoPredictor, RevHorizontalPredictor, RevPredict};
+    use super::{HorizontalPredictor, NoPredictor, RevPredict};
 
     const PRED_INFO: PredictorInfo = PredictorInfo {
         endianness: Endianness::LittleEndian,
@@ -394,7 +353,7 @@ mod test {
     #[rustfmt::skip]
     #[test]
     fn test_hpredict() {
-        let p = RevHorizontalPredictor;
+        let p = HorizontalPredictor;
         let mut predictor_info = PRED_INFO;
         let cases = [
             (0,0, vec![
@@ -541,7 +500,7 @@ mod test {
         //                            0       1
         //                          0       1
         //                        0       1
-        let _shuffled = [0,2,4,6,1,3,5,7u8];  
+        let _shuffled = [0,2,4,6,1,3,5,7u8];
         let diffed = [0,2,2,2,251,2,2,2];
         let info = PredictorInfo {
             endianness: Endianness::LittleEndian,
@@ -556,7 +515,7 @@ mod test {
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
-            &RevFloatingPointPredictor.rev_predict_fix_endianness(input, &info, 1, 1).unwrap()[..],
+            &FloatingPointPredictor.rev_predict_fix_endianness(input, &info, 1, 1).unwrap()[..],
             &expect_le[..]
         )
     }
@@ -586,7 +545,7 @@ mod test {
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
-            &RevFloatingPointPredictor.rev_predict_fix_endianness(input, &info, 1, 1).unwrap()[..],
+            &FloatingPointPredictor.rev_predict_fix_endianness(input, &info, 1, 1).unwrap()[..],
             &expect_le[..]
         )
     }
@@ -615,13 +574,13 @@ mod test {
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
-            &RevFloatingPointPredictor
+            &FloatingPointPredictor
                 .rev_predict_fix_endianness(input.clone(), &info, 0, 1).unwrap()[..],
             &expect_le
         );
         info.endianness = Endianness::BigEndian;
         assert_eq!(
-            &RevFloatingPointPredictor.rev_predict_fix_endianness(input, &info, 0, 1).unwrap()[..],
+            &FloatingPointPredictor.rev_predict_fix_endianness(input, &info, 0, 1).unwrap()[..],
             &expect_le
         )
     }
@@ -650,7 +609,7 @@ mod test {
         };
         let input = Bytes::from_owner(diffed);
         assert_eq!(
-            &RevFloatingPointPredictor
+            &FloatingPointPredictor
                 .rev_predict_fix_endianness(input, &info, 0, 1)
                 .unwrap()[..],
             &expect_be[..]
