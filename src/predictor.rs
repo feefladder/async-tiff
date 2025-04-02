@@ -2,8 +2,8 @@
 use std::fmt::Debug;
 
 use bytes::{Bytes, BytesMut};
-// use tiff::decoder::DecodingResult;
 
+use crate::error::AsyncTiffError;
 use crate::ImageFileDirectory;
 use crate::{error::AsyncTiffResult, reader::Endianness};
 
@@ -78,12 +78,10 @@ impl PredictorInfo {
     ///
     /// strips are considered image-width chunks
     fn chunk_width_pixels(&self, x: u32) -> AsyncTiffResult<u32> {
-        if x >= self.chunks_across() {
-            Err(crate::error::AsyncTiffError::TileIndexError(
-                x,
-                self.chunks_across(),
-            ))
-        } else if x == self.chunks_across() - 1 {
+        let chunks_across = self.chunks_across();
+        if x >= chunks_across {
+            Err(AsyncTiffError::TileIndexError(x, chunks_across))
+        } else if x == chunks_across - 1 {
             // last chunk
             Ok(self.image_width - self.chunk_width * x)
         } else {
@@ -94,14 +92,11 @@ impl PredictorInfo {
     /// chunk height in pixels, taking padding into account
     ///
     /// strips are considered image-width chunks
-    ///
     fn chunk_height_pixels(&self, y: u32) -> AsyncTiffResult<u32> {
-        if y >= self.chunks_down() {
-            Err(crate::error::AsyncTiffError::TileIndexError(
-                y,
-                self.chunks_down(),
-            ))
-        } else if y == self.chunks_down() - 1 {
+        let chunks_down = self.chunks_down();
+        if y >= chunks_down {
+            Err(AsyncTiffError::TileIndexError(y, chunks_down))
+        } else if y == chunks_down - 1 {
             // last chunk
             Ok(self.image_height - self.chunk_height * y)
         } else {
