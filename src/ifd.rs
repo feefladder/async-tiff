@@ -686,22 +686,25 @@ impl ImageFileDirectory {
             panic!("bits_per_sample should be the same for all channels");
         }
 
+        let chunk_width = if let Some(tile_width) = self.tile_width {
+            tile_width
+        } else {
+            self.image_width
+        };
+        let chunk_height = if let Some(tile_height) = self.tile_height {
+            tile_height
+        } else {
+            self.rows_per_strip
+                .expect("no tile height and no rows_per_strip")
+        };
+
         PredictorInfo {
             endianness: self.endianness,
             image_width: self.image_width,
             image_height: self.image_height,
-            chunk_width: if self.tile_width.is_none() {
-                // we are stripped => image_width
-                self.image_width
-            } else {
-                self.tile_width.unwrap()
-            },
-            chunk_height: if self.tile_height.is_none() {
-                self.rows_per_strip
-                    .expect("no tile height and no rows_per_strip")
-            } else {
-                self.tile_height.unwrap()
-            },
+            chunk_width,
+            chunk_height,
+            // TODO: validate this? Restore handling for different PlanarConfiguration?
             bits_per_sample: self.bits_per_sample[0],
             samples_per_pixel: self.samples_per_pixel,
         }
