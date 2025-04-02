@@ -2,7 +2,7 @@ use bytes::Bytes;
 
 use crate::decoder::DecoderRegistry;
 use crate::error::AsyncTiffResult;
-use crate::predictor::{FloatingPointPredictor, HorizontalPredictor, NoPredictor, RevPredict};
+use crate::predictor::{FloatingPointPredictor, HorizontalPredictor, NoPredictor, Unpredict};
 use crate::reader::Endianness;
 use crate::tiff::tags::{
     CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, SampleFormat,
@@ -236,19 +236,19 @@ impl Tile<'_> {
         )?;
 
         match self.predictor {
-            Predictor::None => NoPredictor.rev_predict_fix_endianness(
+            Predictor::None => NoPredictor.fix_endianness_and_unpredict(
                 decoded_tile,
                 &self.predictor_info,
                 self.x as _,
                 self.y as _,
             ),
-            Predictor::Horizontal => HorizontalPredictor.rev_predict_fix_endianness(
+            Predictor::Horizontal => HorizontalPredictor.fix_endianness_and_unpredict(
                 decoded_tile,
                 &self.predictor_info,
                 self.x as _,
                 self.y as _,
             ),
-            Predictor::FloatingPoint => FloatingPointPredictor.rev_predict_fix_endianness(
+            Predictor::FloatingPoint => FloatingPointPredictor.fix_endianness_and_unpredict(
                 decoded_tile,
                 &self.predictor_info,
                 self.x as _,
