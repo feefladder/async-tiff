@@ -285,9 +285,7 @@ mod test {
     use bytes::Bytes;
 
     use crate::{
-        predictor::FloatingPointPredictor,
-        reader::Endianness,
-        tiff::tags::{PlanarConfiguration, SampleFormat},
+        predictor::FloatingPointPredictor, reader::Endianness, tiff::tags::PlanarConfiguration,
         tile::PredictorInfo,
     };
 
@@ -301,7 +299,6 @@ mod test {
         chunk_height: 4,
         bits_per_sample: &[8],
         samples_per_pixel: 1,
-        sample_format: &[SampleFormat::Uint],
         planar_configuration: crate::tiff::tags::PlanarConfiguration::Chunky,
     };
     #[rustfmt::skip]
@@ -382,7 +379,6 @@ mod test {
         for (x,y, input, expected) in cases {
             println!("uints littleendian");
             predictor_info.endianness = Endianness::LittleEndian;
-            predictor_info.sample_format = &[SampleFormat::Uint];
             predictor_info.bits_per_sample = &[8];
             assert_eq!(-1i32 as u8, 255);
             println!("testing u8");
@@ -409,7 +405,6 @@ mod test {
             assert_eq!(p.fix_endianness_and_unpredict(buffer, &predictor_info, x, y).unwrap(), res);
 
             println!("ints littleendian");
-            predictor_info.sample_format = &[SampleFormat::Int];
             predictor_info.bits_per_sample = &[8];
             println!("testing i8");
             let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i8).to_le_bytes()).collect::<Vec<_>>());
@@ -434,7 +429,6 @@ mod test {
 
             println!("uints bigendian");
             predictor_info.endianness = Endianness::BigEndian;
-            predictor_info.sample_format = &[SampleFormat::Uint];
             predictor_info.bits_per_sample = &[8];
             assert_eq!(-1i32 as u8, 255);
             println!("testing u8");
@@ -509,7 +503,6 @@ mod test {
             chunk_height: 4,
             bits_per_sample: &[16],
             samples_per_pixel: 1,
-            sample_format: &[SampleFormat::IEEEFP],
             planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
@@ -539,7 +532,6 @@ mod test {
             chunk_height: 4,
             bits_per_sample: &[16],
             samples_per_pixel: 1,
-            sample_format: &[SampleFormat::IEEEFP],
             planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
@@ -568,7 +560,6 @@ mod test {
             chunk_height: 2,
             bits_per_sample: &[32],
             samples_per_pixel: 1,
-            sample_format: &[SampleFormat::IEEEFP],
             planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);
@@ -603,7 +594,6 @@ mod test {
             chunk_height: 2,
             bits_per_sample: &[64],
             samples_per_pixel: 1,
-            sample_format: &[SampleFormat::IEEEFP],
             planar_configuration: PlanarConfiguration::Chunky,
         };
         let input = Bytes::from_owner(diffed);

@@ -5,7 +5,7 @@ use crate::error::AsyncTiffResult;
 use crate::predictor::{FloatingPointPredictor, HorizontalPredictor, NoPredictor, Unpredict};
 use crate::reader::Endianness;
 use crate::tiff::tags::{
-    CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor, SampleFormat,
+    CompressionMethod, PhotometricInterpretation, PlanarConfiguration, Predictor,
 };
 use crate::tiff::{TiffError, TiffUnsupportedError};
 
@@ -17,33 +17,29 @@ use crate::tiff::{TiffError, TiffUnsupportedError};
 /// Also provides convenience functions
 ///
 #[derive(Debug, Clone, Copy)]
-pub struct PredictorInfo<'a> {
+pub(crate) struct PredictorInfo<'a> {
     /// endianness
-    pub endianness: Endianness,
+    pub(crate) endianness: Endianness,
     /// width of the image in pixels
-    pub image_width: u32,
+    pub(crate) image_width: u32,
     /// height of the image in pixels
-    pub image_height: u32,
+    pub(crate) image_height: u32,
     /// chunk width in pixels
     ///
     /// If this is a stripped tiff, `chunk_width=image_width`
-    pub chunk_width: u32,
+    pub(crate) chunk_width: u32,
     /// chunk height in pixels
-    pub chunk_height: u32,
+    pub(crate) chunk_height: u32,
     /// bits per sample, as an array
     ///
     /// Can also be a single value, in which case it applies to all samples
-    pub bits_per_sample: &'a [u16], // maybe say that we only support a single bits_per_sample?
+    pub(crate) bits_per_sample: &'a [u16], // maybe say that we only support a single bits_per_sample?
     /// number of samples per pixel
-    pub samples_per_pixel: u16,
-    /// sample format for each sample
-    ///
-    /// There is no decoding implementation in this crate (or libtiff) for mixed sample formats
-    pub sample_format: &'a [SampleFormat], // and a single sample_format?
+    pub(crate) samples_per_pixel: u16,
     /// planar configuration
     ///
     /// determines the bits per pixel
-    pub planar_configuration: PlanarConfiguration,
+    pub(crate) planar_configuration: PlanarConfiguration,
 }
 
 impl PredictorInfo<'_> {
@@ -260,10 +256,7 @@ impl Tile<'_> {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        reader::Endianness,
-        tiff::tags::{PlanarConfiguration, SampleFormat},
-    };
+    use crate::{reader::Endianness, tiff::tags::PlanarConfiguration};
 
     use super::PredictorInfo;
 
@@ -277,7 +270,6 @@ mod test {
             chunk_height: 8,
             bits_per_sample: &[8],
             samples_per_pixel: 1,
-            sample_format: &[SampleFormat::Uint],
             planar_configuration: PlanarConfiguration::Chunky,
         };
         assert_eq!(info.bits_per_pixel(), 8);
