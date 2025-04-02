@@ -15,4 +15,4 @@ mod tile;
 
 pub use cog::TIFF;
 pub use ifd::ImageFileDirectory;
-pub use tile::{PredictorInfo, Tile};
+pub use tile::Tile;

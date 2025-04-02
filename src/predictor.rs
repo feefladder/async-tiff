@@ -7,7 +7,7 @@ use bytes::{Bytes, BytesMut};
 use crate::{error::AsyncTiffResult, reader::Endianness, tile::PredictorInfo};
 
 /// Trait for reverse predictors to implement
-pub trait Unpredict: Debug + Send + Sync {
+pub(crate) trait Unpredict: Debug + Send + Sync {
     /// reverse predict the decompressed bytes and fix endianness on the output
     fn fix_endianness_and_unpredict(
         &self,
