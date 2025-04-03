@@ -12,6 +12,8 @@ use crate::tiff::{TiffError, TiffUnsupportedError};
 /// so that sync and async operations can be separated and non-blocking.
 ///
 /// This is returned by `fetch_tile`.
+///
+/// A strip of a stripped tiff is an image-width, rows-per-strip tile.
 #[derive(Debug)]
 pub struct Tile {
     pub(crate) x: usize,
