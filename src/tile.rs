@@ -2,9 +2,7 @@ use bytes::Bytes;
 
 use crate::decoder::DecoderRegistry;
 use crate::error::AsyncTiffResult;
-use crate::predictor::{
-    FloatingPointPredictor, HorizontalPredictor, NoPredictor, PredictorInfo, Unpredict,
-};
+use crate::predictor::{fix_endianness, unpredict_float, unpredict_hdiff, PredictorInfo};
 use crate::tiff::tags::{CompressionMethod, PhotometricInterpretation, Predictor};
 use crate::tiff::{TiffError, TiffUnsupportedError};
 
@@ -80,24 +78,17 @@ impl Tile {
         )?;
 
         match self.predictor {
-            Predictor::None => NoPredictor.fix_endianness_and_unpredict(
+            Predictor::None => Ok(fix_endianness(
                 decoded_tile,
-                &self.predictor_info,
-                self.x as _,
-                self.y as _,
-            ),
-            Predictor::Horizontal => HorizontalPredictor.fix_endianness_and_unpredict(
-                decoded_tile,
-                &self.predictor_info,
-                self.x as _,
-                self.y as _,
-            ),
-            Predictor::FloatingPoint => FloatingPointPredictor.fix_endianness_and_unpredict(
-                decoded_tile,
-                &self.predictor_info,
-                self.x as _,
-                self.y as _,
-            ),
+                self.predictor_info.endianness(),
+                self.predictor_info.bits_per_sample(),
+            )),
+            Predictor::Horizontal => {
+                unpredict_hdiff(decoded_tile, &self.predictor_info, self.x as _)
+            }
+            Predictor::FloatingPoint => {
+                unpredict_float(decoded_tile, &self.predictor_info, self.x as _, self.y as _)
+            }
         }
     }
 }
