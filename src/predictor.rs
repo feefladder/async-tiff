@@ -291,7 +291,7 @@ impl Unpredict for FloatingPointPredictor {
     ) -> AsyncTiffResult<Bytes> {
         let output_row_stride = predictor_info.output_row_stride(tile_x)?;
         let mut res: BytesMut =
-            BytesMut::zeroed(output_row_stride * predictor_info.output_rows(tile_y)? as usize);
+            BytesMut::zeroed(output_row_stride * predictor_info.output_rows(tile_y)?);
         let bit_depth = predictor_info.bits_per_sample;
         if predictor_info.chunk_width_pixels(tile_x)? == predictor_info.chunk_width {
             // no special padding handling
