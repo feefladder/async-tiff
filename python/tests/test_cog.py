@@ -1,5 +1,7 @@
+import pytest
+
 from async_tiff import TIFF, enums
-from async_tiff.store import S3Store
+from async_tiff.store import LocalStore, S3Store
 
 
 async def test_cog_s3():
@@ -23,3 +25,12 @@ async def test_cog_s3():
     gkd = ifd.geo_key_directory
     assert gkd.citation == "WGS 84 / UTM zone 12N"
     assert gkd.projected_type == 32612
+
+
+async def test_cog_missing_file():
+    """
+    Ensure that a FileNotFoundError is raised when passing in a missing file.
+    """
+    store = LocalStore()
+    with pytest.raises(FileNotFoundError):
+        await TIFF.open(path="imaginary_file.tif", store=store)
