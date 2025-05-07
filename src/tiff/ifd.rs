@@ -55,9 +55,7 @@ impl Value {
             Short(val) => Ok(val),
             Unsigned(val) => Ok(u16::try_from(val)?),
             UnsignedBig(val) => Ok(u16::try_from(val)?),
-            val => Err(TiffError::FormatError(
-                TiffFormatError::UnsignedIntegerExpected(val),
-            )),
+            val => Err(TiffError::FormatError(TiffFormatError::ShortExpected(val))),
         }
     }
 
@@ -159,6 +157,7 @@ impl Value {
                 }
                 Ok(new_vec)
             }
+            Short(val) => Ok(vec![val.into()]),
             Unsigned(val) => Ok(vec![val]),
             UnsignedBig(val) => Ok(vec![u32::try_from(val)?]),
             Rational(numerator, denominator) => Ok(vec![numerator, denominator]),
@@ -201,9 +200,7 @@ impl Value {
                 Ok(new_vec)
             }
             Short(val) => Ok(vec![val]),
-            val => Err(TiffError::FormatError(
-                TiffFormatError::UnsignedIntegerExpected(val),
-            )),
+            val => Err(TiffError::FormatError(TiffFormatError::ShortExpected(val))),
         }
     }
 
