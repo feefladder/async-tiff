@@ -196,7 +196,7 @@ impl fmt::Display for TiffUnsupportedError {
                 write!(fmt, "Compression method {:?} is unsupported", method)
             }
             UnsupportedPredictor(p) => {
-                write!(fmt, "Predictor {p:?} is not supported")
+                write!(fmt, "Predictor {p:?} is unsupported")
             }
             UnsupportedSampleDepth(samples) => {
                 write!(fmt, "{} samples per pixel is unsupported.", samples)
