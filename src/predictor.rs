@@ -325,7 +325,7 @@ pub fn rev_predict_f16(input: &mut [u8], output: &mut [u8], samples: usize) {
         input[i] = input[i].wrapping_add(input[i - samples]);
     }
     // reverse byte shuffle and fix endianness
-    for (i, chunk) in output.chunks_mut(2).enumerate() {
+    for (i, chunk) in output.chunks_exact_mut(2).enumerate() {
         chunk.copy_from_slice(&u16::to_ne_bytes(
             // convert to native-endian
             // floating predictor is be-like
@@ -345,7 +345,7 @@ pub fn rev_predict_f32(input: &mut [u8], output: &mut [u8], samples: usize) {
         input[i] = input[i].wrapping_add(input[i - samples]);
     }
     // reverse byte shuffle and fix endianness
-    for (i, chunk) in output.chunks_mut(4).enumerate() {
+    for (i, chunk) in output.chunks_exact_mut(4).enumerate() {
         chunk.copy_from_slice(
             // convert to native-endian
             &u32::to_ne_bytes(
@@ -371,7 +371,7 @@ pub fn rev_predict_f64(input: &mut [u8], output: &mut [u8], samples: usize) {
         input[i] = input[i].wrapping_add(input[i - samples]);
     }
 
-    for (i, chunk) in output.chunks_mut(8).enumerate() {
+    for (i, chunk) in output.chunks_exact_mut(8).enumerate() {
         chunk.copy_from_slice(
             // convert to native-endian
             &u64::to_ne_bytes(
