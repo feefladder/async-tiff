@@ -165,7 +165,7 @@ pub(crate) fn unpredict_hdiff(
 
 /// Reverse predictor convenience function for horizontal differencing
 ///
-/// From image-tiff
+// From image-tiff
 ///
 /// This should be used _after_ endianness fixing
 pub fn rev_hpredict_nsamp(buf: &mut [u8], bit_depth: u16, samples: usize) {
@@ -204,7 +204,7 @@ pub fn rev_hpredict_nsamp(buf: &mut [u8], bit_depth: u16, samples: usize) {
 
 /// Fix endianness. If `byte_order` matches the host, then conversion is a no-op.
 ///
-/// from image-tiff
+// from image-tiff
 pub fn fix_endianness(buffer: Bytes, byte_order: Endianness, bit_depth: u16) -> Bytes {
     #[cfg(target_endian = "little")]
     if let Endianness::LittleEndian = byte_order {
