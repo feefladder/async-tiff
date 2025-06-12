@@ -1,10 +1,8 @@
 //! Predictors for no predictor, horizontal and floating-point
 use std::fmt::Debug;
 
-use bytes::{Bytes, BytesMut};
-
 use crate::error::AsyncTiffError;
-use crate::tiff::tags::PlanarConfiguration;
+use crate::tiff::tags::{PlanarConfiguration, SampleFormat};
 use crate::ImageFileDirectory;
 use crate::{error::AsyncTiffResult, reader::Endianness};
 
@@ -16,7 +14,7 @@ use crate::{error::AsyncTiffResult, reader::Endianness};
 /// Also provides convenience functions
 ///
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct PredictorInfo {
+pub struct PredictorInfo {
     /// endianness
     endianness: Endianness,
     /// width of the image in pixels
@@ -32,10 +30,23 @@ pub(crate) struct PredictorInfo {
     /// bits per sample
     ///
     /// We only support a single bits_per_sample across all samples
-    bits_per_sample: u16,
+    pub(crate) bits_per_sample: u16,
     /// number of samples per pixel
-    samples_per_pixel: u16,
-
+    pub(crate) samples_per_pixel: u16,
+    /// sample format (used for creating DecodingResult)
+    pub(crate) sample_format: SampleFormat,
+    /// planar configuration, determines the shape of the resulting image
+    /// ```raw
+    /// [
+    /// RGBRGBRGB
+    /// ]
+    /// vs
+    /// [
+    /// RRR,
+    /// GGG,
+    /// BBB
+    /// ]
+    /// ```
     planar_configuration: PlanarConfiguration,
 }
 
@@ -71,16 +82,17 @@ impl PredictorInfo {
             image_height: ifd.image_height,
             chunk_width,
             chunk_height,
-            planar_configuration: ifd.planar_configuration,
             bits_per_sample: ifd.bits_per_sample[0],
             samples_per_pixel: ifd.samples_per_pixel,
+            sample_format: ifd.sample_format[0],
+            planar_configuration: ifd.planar_configuration,
         }
     }
 
     /// chunk width in pixels, taking padding into account
     ///
     /// strips are considered image-width chunks
-    fn chunk_width_pixels(&self, x: u32) -> AsyncTiffResult<u32> {
+    pub(crate) fn chunk_width_pixels(&self, x: u32) -> AsyncTiffResult<u32> {
         let chunks_across = self.chunks_across();
         if x >= chunks_across {
             Err(AsyncTiffError::TileIndexError(x, chunks_across))
@@ -113,7 +125,7 @@ impl PredictorInfo {
     }
 
     /// the number of rows the output has, taking padding and PlanarConfiguration into account.
-    fn output_rows(&self, y: u32) -> AsyncTiffResult<usize> {
+    pub(crate) fn output_rows(&self, y: u32) -> AsyncTiffResult<usize> {
         match self.planar_configuration {
             PlanarConfiguration::Chunky => Ok(self.chunk_height_pixels(y)? as usize),
             PlanarConfiguration::Planar => {
@@ -143,24 +155,23 @@ impl PredictorInfo {
     }
 }
 
-/// reverse horizontal predictor
+/// in-place reverse horizontal predictor
 ///
 /// fixes byte order before reversing differencing
 pub(crate) fn unpredict_hdiff(
-    buffer: Bytes,
+    buffer: &mut [u8],
     predictor_info: &PredictorInfo,
     tile_x: u32,
-) -> AsyncTiffResult<Bytes> {
+) -> AsyncTiffResult<()> {
     let output_row_stride = predictor_info.output_row_stride(tile_x)?;
     let samples = predictor_info.samples_per_pixel as usize;
     let bit_depth = predictor_info.bits_per_sample;
 
-    let buffer = fix_endianness(buffer, predictor_info.endianness, bit_depth);
-    let mut res = BytesMut::from(buffer);
-    for buf in res.chunks_mut(output_row_stride) {
+    fix_endianness(buffer, predictor_info.endianness, bit_depth);
+    for buf in buffer.chunks_mut(output_row_stride) {
         rev_hpredict_nsamp(buf, bit_depth, samples);
     }
-    Ok(res.into())
+    Ok(())
 }
 
 /// Reverse predictor convenience function for horizontal differencing
@@ -202,51 +213,45 @@ pub fn rev_hpredict_nsamp(buf: &mut [u8], bit_depth: u16, samples: usize) {
     }
 }
 
-/// Fix endianness. If `byte_order` matches the host, then conversion is a no-op.
+/// Fix endianness in-place. If `byte_order` matches the host, then conversion is a no-op.
 ///
 // from image-tiff
-pub fn fix_endianness(buffer: Bytes, byte_order: Endianness, bit_depth: u16) -> Bytes {
+pub fn fix_endianness(buffer: &mut [u8], byte_order: Endianness, bit_depth: u16) {
     #[cfg(target_endian = "little")]
     if let Endianness::LittleEndian = byte_order {
-        return buffer;
+        return;
     }
     #[cfg(target_endian = "big")]
     if let Endianness::BigEndian = byte_order {
-        return buffer;
+        return;
     }
 
     match byte_order {
-        Endianness::LittleEndian => {
-            let mut buf = BytesMut::from(buffer);
-            match bit_depth {
-                0..=8 => {}
-                9..=16 => buf.chunks_exact_mut(2).for_each(|v| {
-                    v.copy_from_slice(&u16::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
-                }),
-                17..=32 => buf.chunks_exact_mut(4).for_each(|v| {
-                    v.copy_from_slice(&u32::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
-                }),
-                _ => buf.chunks_exact_mut(8).for_each(|v| {
-                    v.copy_from_slice(&u64::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
-                }),
-            }
-            buf.freeze()
-        }
+        Endianness::LittleEndian => match bit_depth {
+            0..=8 => {}
+            9..=16 => buffer.chunks_exact_mut(2).for_each(|v| {
+                v.copy_from_slice(&u16::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
+            }),
+            17..=32 => buffer.chunks_exact_mut(4).for_each(|v| {
+                v.copy_from_slice(&u32::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
+            }),
+            _ => buffer.chunks_exact_mut(8).for_each(|v| {
+                v.copy_from_slice(&u64::from_le_bytes((*v).try_into().unwrap()).to_ne_bytes())
+            }),
+        },
         Endianness::BigEndian => {
-            let mut buf = BytesMut::from(buffer);
             match bit_depth {
                 0..=8 => {}
-                9..=16 => buf.chunks_exact_mut(2).for_each(|v| {
+                9..=16 => buffer.chunks_exact_mut(2).for_each(|v| {
                     v.copy_from_slice(&u16::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
                 }),
-                17..=32 => buf.chunks_exact_mut(4).for_each(|v| {
+                17..=32 => buffer.chunks_exact_mut(4).for_each(|v| {
                     v.copy_from_slice(&u32::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
                 }),
-                _ => buf.chunks_exact_mut(8).for_each(|v| {
+                _ => buffer.chunks_exact_mut(8).for_each(|v| {
                     v.copy_from_slice(&u64::from_be_bytes((*v).try_into().unwrap()).to_ne_bytes())
                 }),
             };
-            buf.freeze()
         }
     }
 }
@@ -258,21 +263,20 @@ pub fn fix_endianness(buffer: Bytes, byte_order: Endianness, bit_depth: u16) -> 
 ///
 /// If the tile has horizontal padding, it will shorten the output.
 pub(crate) fn unpredict_float(
-    buffer: Bytes,
+    in_buffer: &mut [u8],
+    out_buffer: &mut [u8],
     predictor_info: &PredictorInfo,
     tile_x: u32,
-    tile_y: u32,
-) -> AsyncTiffResult<Bytes> {
+) -> AsyncTiffResult<()> {
     let output_row_stride = predictor_info.output_row_stride(tile_x)?;
-    let mut res: BytesMut =
-        BytesMut::zeroed(output_row_stride * predictor_info.output_rows(tile_y)?);
+    // let mut res: BytesMut =
+    //     BytesMut::zeroed(output_row_stride * predictor_info.output_rows(tile_y)?);
     let bit_depth = predictor_info.bits_per_sample;
     if predictor_info.chunk_width_pixels(tile_x)? == predictor_info.chunk_width {
         // no special padding handling
-        let mut input = BytesMut::from(buffer);
-        for (in_buf, out_buf) in input
+        for (in_buf, out_buf) in in_buffer
             .chunks_mut(output_row_stride)
-            .zip(res.chunks_mut(output_row_stride))
+            .zip(out_buffer.chunks_mut(output_row_stride))
         {
             match bit_depth {
                 16 => rev_predict_f16(in_buf, out_buf, predictor_info.samples_per_pixel as _),
@@ -287,16 +291,14 @@ pub(crate) fn unpredict_float(
         }
     } else {
         // specially handle padding bytes
-        // create a buffer for the full width
-        let mut input = BytesMut::from(buffer);
-
         let input_row_stride =
             predictor_info.chunk_width as usize * predictor_info.bits_per_sample as usize / 8;
-        for (in_buf, out_buf) in input
+        for (in_buf, out_buf) in in_buffer
             .chunks_mut(input_row_stride)
-            .zip(res.chunks_mut(output_row_stride))
+            .zip(out_buffer.chunks_mut(output_row_stride))
         {
-            let mut out_row = BytesMut::zeroed(input_row_stride);
+            // create a buffer for the full width
+            let mut out_row = vec![0; input_row_stride];
             match bit_depth {
                 16 => rev_predict_f16(in_buf, &mut out_row, predictor_info.samples_per_pixel as _),
                 32 => rev_predict_f32(in_buf, &mut out_row, predictor_info.samples_per_pixel as _),
@@ -311,7 +313,7 @@ pub(crate) fn unpredict_float(
             out_buf.copy_from_slice(&out_row[..output_row_stride]);
         }
     }
-    Ok(res.into())
+    Ok(())
 }
 
 /// Reverse floating point prediction
@@ -395,8 +397,6 @@ pub fn rev_predict_f64(input: &mut [u8], output: &mut [u8], samples: usize) {
 mod test {
     use std::vec;
 
-    use bytes::Bytes;
-
     use crate::{
         predictor::{unpredict_float, unpredict_hdiff},
         reader::Endianness,
@@ -412,6 +412,7 @@ mod test {
         chunk_height: 4,
         bits_per_sample: 8,
         samples_per_pixel: 1,
+        sample_format: SampleFormat::Uint, // not used
         planar_configuration: PlanarConfiguration::Chunky,
     };
     #[rustfmt::skip]
@@ -535,104 +536,118 @@ mod test {
             predictor_info.bits_per_sample = 8;
             assert_eq!(-1i32 as u8, 255);
             println!("testing u8");
-            let buffer = Bytes::from(input.iter().map(|v| *v as u8).collect::<Vec<_>>());
-            let res = Bytes::from(expected.clone());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().map(|v| *v as u8).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, expected);
             assert_eq!(-1i32 as u16, u16::MAX);
             println!("testing u16");
             predictor_info.bits_per_sample = 16;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u16).to_le_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as u16).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as u16).to_le_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as u16).to_ne_bytes()).collect::<Vec<_>>();
+            println!("result buffer: {:?}", &res);
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing u32");
             predictor_info.bits_per_sample = 32;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u32).to_le_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as u32).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as u32).to_le_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as u32).to_ne_bytes()).collect::<Vec<_>>();
+            println!("result buffer: {:?}", &res);
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             assert_eq!(-1i32 as u64, u64::MAX);
             println!("testing u64");
             predictor_info.bits_per_sample = 64;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u64).to_le_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as u64).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as u64).to_le_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as u64).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
 
             println!("ints littleendian");
             predictor_info.bits_per_sample = 8;
             println!("testing i8");
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i8).to_le_bytes()).collect::<Vec<_>>());
-            println!("{:?}", &buffer[..]);
-            let res = Bytes::from(expected.clone());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap()[..], res[..]);
+            let mut res = input.iter().flat_map(|v| (*v as i8).to_le_bytes()).collect::<Vec<_>>();
+            println!("{:?}", &res[..]);
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, expected);
             println!("testing i16");
             predictor_info.bits_per_sample = 16;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i16).to_le_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as i16).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as i16).to_le_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as i16).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             println!("testing i32");
             predictor_info.bits_per_sample = 32;
-            let buffer = Bytes::from(input.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             println!("testing i64");
             predictor_info.bits_per_sample = 64;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i64).to_le_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as i64).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as i64).to_le_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as i64).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
 
             println!("uints bigendian");
             predictor_info.endianness = Endianness::BigEndian;
             predictor_info.bits_per_sample = 8;
             assert_eq!(-1i32 as u8, 255);
             println!("testing u8");
-            let buffer = Bytes::from(input.iter().map(|v| *v as u8).collect::<Vec<_>>());
-            let res = Bytes::from(expected.clone());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().map(|v| *v as u8).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, expected);
             assert_eq!(-1i32 as u16, u16::MAX);
             println!("testing u16");
             predictor_info.bits_per_sample = 16;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u16).to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as u16).to_ne_bytes()).collect::<Vec<_>>());
-            println!("buffer: {:?}", &buffer[..]);
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap()[..], res[..]);
+            let mut res = input.iter().flat_map(|v| (*v as u16).to_be_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as u16).to_ne_bytes()).collect::<Vec<_>>();
+            println!("buffer: {:?}", &res);
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing u32");
             predictor_info.bits_per_sample = 32;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u32).to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as u32).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as u32).to_be_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as u32).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             assert_eq!(-1i32 as u64, u64::MAX);
             println!("testing u64");
             predictor_info.bits_per_sample = 64;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as u64).to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as u64).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as u64).to_be_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as u64).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
 
             println!("ints bigendian");
             predictor_info.bits_per_sample = 8;
             assert_eq!(-1i32 as u8, 255);
             println!("testing i8");
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i8).to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.clone());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as i8).to_be_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, expected);
             assert_eq!(-1i32 as u16, u16::MAX);
             println!("testing i16");
             predictor_info.bits_per_sample = 16;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i16).to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as i16).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as i16).to_be_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as i16).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             assert_eq!(-1i32 as u32, u32::MAX);
             println!("testing i32");
             predictor_info.bits_per_sample = 32;
-            let buffer = Bytes::from(input.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| v.to_be_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as i32).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
             assert_eq!(-1i32 as u64, u64::MAX);
             println!("testing i64");
             predictor_info.bits_per_sample = 64;
-            let buffer = Bytes::from(input.iter().flat_map(|v| (*v as i64).to_be_bytes()).collect::<Vec<_>>());
-            let res = Bytes::from(expected.iter().flat_map(|v| (*v as i64).to_ne_bytes()).collect::<Vec<_>>());
-            assert_eq!(unpredict_hdiff(buffer, &predictor_info, x).unwrap(), res);
+            let mut res = input.iter().flat_map(|v| (*v as i64).to_be_bytes()).collect::<Vec<_>>();
+            let exp = expected.iter().flat_map(|v| (*v as i64).to_ne_bytes()).collect::<Vec<_>>();
+            unpredict_hdiff(&mut res, &predictor_info, x).unwrap();
+            assert_eq!(res, exp);
         }
     }
 
@@ -647,7 +662,7 @@ mod test {
         //                          0       1
         //                        0       1
         let _shuffled = [0,2,4,6,1,3,5,7u8];
-        let diffed = [0,2,2,2,251,2,2,2];
+        let mut diffed = [0,2,2,2,251,2,2,2];
         let info = PredictorInfo {
             endianness: Endianness::LittleEndian,
             image_width: 4+4,
@@ -656,13 +671,13 @@ mod test {
             chunk_height: 4,
             bits_per_sample: 16,
             samples_per_pixel: 1,
+            sample_format: SampleFormat::IEEEFP,
             planar_configuration: PlanarConfiguration::Chunky,
         };
-        let input = Bytes::from_owner(diffed);
-        assert_eq!(
-            &unpredict_float(input, &info, 1, 1).unwrap()[..],
-            &expect_le[..]
-        )
+        let mut res = [0u8;8];
+        
+        unpredict_float(&mut diffed, &mut res, &info, 1).unwrap();
+        assert_eq!(res,expect_le);
     }
 
     #[rustfmt::skip]
@@ -676,7 +691,7 @@ mod test {
         //                          0       1
         //                        0       1
         let _shuffled = [0,2,0,0,1,3,0,0u8];
-        let diffed = [0,2,254,0,1,2,253,0];
+        let mut diffed = [0,2,254,0,1,2,253,0];
         let info = PredictorInfo {
             endianness: Endianness::LittleEndian,
             image_width: 4+2,
@@ -685,25 +700,26 @@ mod test {
             chunk_height: 4,
             bits_per_sample: 16,
             samples_per_pixel: 1,
+            sample_format: SampleFormat::IEEEFP,
             planar_configuration: PlanarConfiguration::Chunky,
         };
-        let input = Bytes::from_owner(diffed);
-        assert_eq!(
-            &unpredict_float(input, &info, 1, 1).unwrap()[..],
-            &expect_le[..]
-        )
+        // let input = Bytes::from_owner(diffed);
+        let mut res = [0u8; 4];
+        
+        unpredict_float(&mut diffed, &mut res, &info, 1).unwrap();
+        assert_eq!(res, expect_le);
     }
 
     #[rustfmt::skip]
     #[test]
     fn test_fpredict_f32() {
         // let's take this 2-value image where we only look at bytes
-        let expect_le  = [3,2,  1,0,  7,6,  5,4];
+        let expect_le  = [3,2,  1,0,  7,6,  5,4u8];
         let _expected  = [0,1,  2,3,  4,5,  6,7u8];
         //                           0     1     2     3   \_ de-shuffling indices
         //                         0     1     2     3     /  (the one the function uses)
         let _shuffled  = [0,4,  1,5,  2,6,  3,7u8];
-        let diffed     = [0,4,253,4,253,4,253,4u8];
+        let mut diffed     = [0,4,253,4,253,4,253,4u8];
         println!("expected: {expect_le:?}");
         let info = PredictorInfo {
             endianness: Endianness::LittleEndian,
@@ -713,13 +729,12 @@ mod test {
             chunk_height: 2,
             bits_per_sample: 32,
             samples_per_pixel: 1,
+            sample_format: SampleFormat::IEEEFP,
             planar_configuration: PlanarConfiguration::Chunky,
         };
-        let input = Bytes::from_owner(diffed);
-        assert_eq!(
-            &unpredict_float(input.clone(), &info, 0, 1).unwrap()[..],
-            &expect_le
-        );
+        let mut res = [0u8; 8];
+        unpredict_float(&mut diffed, &mut res, &info, 0).unwrap();
+        assert_eq!(res, expect_le);
     }
 
     #[rustfmt::skip]
@@ -727,12 +742,12 @@ mod test {
     fn test_fpredict_f64() {
         assert_eq!(f64::from_le_bytes([7,6,5,4,3,2,1,0]), f64::from_bits(0x00_01_02_03_04_05_06_07));
         // let's take this 2-value image
-        let expect_be =  [7,6,5,4,3, 2,1, 0,15,14,13,12,11,10,9,8];
+        let expect_le =  [7,6,5,4,3, 2,1, 0,15,14,13,12,11,10,9,8u8];
         let _expected  = [0,1,2,3,4, 5,6, 7,8, 9,10,11,12,13,14,15u8];
         //                           0   1    2    3    4     5     6     7
         //                         0   1   2    3    4     5     6     7
         let _shuffled = [0,8,1,9,2,10,3,11,4,12, 5,13, 6,14, 7,15u8];
-        let diffed = [0,8,249,8,249,8,249,8,249,8,249,8,249,8,249,8u8];
+        let mut diffed = [0,8,249,8,249,8,249,8,249,8,249,8,249,8,249,8u8];
         let info = PredictorInfo {
             endianness: Endianness::LittleEndian,
             image_width: 2,
@@ -741,13 +756,11 @@ mod test {
             chunk_height: 2,
             bits_per_sample: 64,
             samples_per_pixel: 1,
+            sample_format: SampleFormat::IEEEFP,
             planar_configuration: PlanarConfiguration::Chunky,
         };
-        let input = Bytes::from_owner(diffed);
-        assert_eq!(
-            &unpredict_float(input, &info, 0, 1)
-                .unwrap()[..],
-            &expect_be[..]
-        );
+        let mut res = [0u8;16];
+        unpredict_float(&mut diffed, &mut res, &info, 0).unwrap();
+        assert_eq!(res, expect_le);
     }
 }

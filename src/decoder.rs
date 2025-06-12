@@ -54,10 +54,11 @@ pub trait Decoder: Debug + Send + Sync {
     /// Decode a TIFF tile.
     fn decode_tile(
         &self,
-        buffer: Bytes,
+        compressed_buffer: Bytes,
+        result_buffer: &mut [u8],
         photometric_interpretation: PhotometricInterpretation,
         jpeg_tables: Option<&[u8]>,
-    ) -> AsyncTiffResult<Bytes>;
+    ) -> AsyncTiffResult<()>;
 }
 
 /// A decoder for the Deflate compression method.
@@ -67,14 +68,14 @@ pub struct DeflateDecoder;
 impl Decoder for DeflateDecoder {
     fn decode_tile(
         &self,
-        buffer: Bytes,
+        compressed_buffer: Bytes,
+        result_buffer: &mut [u8],
         _photometric_interpretation: PhotometricInterpretation,
         _jpeg_tables: Option<&[u8]>,
-    ) -> AsyncTiffResult<Bytes> {
-        let mut decoder = ZlibDecoder::new(Cursor::new(buffer));
-        let mut buf = Vec::new();
-        decoder.read_to_end(&mut buf)?;
-        Ok(buf.into())
+    ) -> AsyncTiffResult<()> {
+        let mut decoder = ZlibDecoder::new(Cursor::new(compressed_buffer));
+        decoder.read_exact(result_buffer)?;
+        Ok(())
     }
 }
 
@@ -85,11 +86,17 @@ pub struct JPEGDecoder;
 impl Decoder for JPEGDecoder {
     fn decode_tile(
         &self,
-        buffer: Bytes,
+        compressed_buffer: Bytes,
+        result_buffer: &mut [u8],
         photometric_interpretation: PhotometricInterpretation,
         jpeg_tables: Option<&[u8]>,
-    ) -> AsyncTiffResult<Bytes> {
-        decode_modern_jpeg(buffer, photometric_interpretation, jpeg_tables)
+    ) -> AsyncTiffResult<()> {
+        decode_modern_jpeg(
+            compressed_buffer,
+            result_buffer,
+            photometric_interpretation,
+            jpeg_tables,
+        )
     }
 }
 
@@ -100,14 +107,18 @@ pub struct LZWDecoder;
 impl Decoder for LZWDecoder {
     fn decode_tile(
         &self,
-        buffer: Bytes,
+        compressed_buffer: Bytes,
+        result_buffer: &mut [u8],
         _photometric_interpretation: PhotometricInterpretation,
         _jpeg_tables: Option<&[u8]>,
-    ) -> AsyncTiffResult<Bytes> {
+    ) -> AsyncTiffResult<()> {
         // https://github.com/image-rs/image-tiff/blob/90ae5b8e54356a35e266fb24e969aafbcb26e990/src/decoder/stream.rs#L147
         let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-        let decoded = decoder.decode(&buffer).expect("failed to decode LZW data");
-        Ok(decoded.into())
+        let decoded = decoder
+            .decode(&compressed_buffer)
+            .expect("failed to decode LZW data");
+        result_buffer.copy_from_slice(&decoded);
+        Ok(())
     }
 }
 
@@ -118,20 +129,24 @@ pub struct UncompressedDecoder;
 impl Decoder for UncompressedDecoder {
     fn decode_tile(
         &self,
-        buffer: Bytes,
+        compressed_buffer: Bytes,
+        result_buffer: &mut [u8],
         _photometric_interpretation: PhotometricInterpretation,
         _jpeg_tables: Option<&[u8]>,
-    ) -> AsyncTiffResult<Bytes> {
-        Ok(buffer)
+    ) -> AsyncTiffResult<()> {
+        assert_eq!(compressed_buffer.len(), result_buffer.len());
+        result_buffer.copy_from_slice(&compressed_buffer);
+        Ok(())
     }
 }
 
 // https://github.com/image-rs/image-tiff/blob/3bfb43e83e31b0da476832067ada68a82b378b7b/src/decoder/image.rs#L389-L450
 fn decode_modern_jpeg(
-    buf: Bytes,
+    compressed_buffer: Bytes,
+    result_buffer: &mut [u8],
     photometric_interpretation: PhotometricInterpretation,
     jpeg_tables: Option<&[u8]>,
-) -> AsyncTiffResult<Bytes> {
+) -> AsyncTiffResult<()> {
     // Construct new jpeg_reader wrapping a SmartReader.
     //
     // JPEG compression in TIFF allows saving quantization and/or huffman tables in one central
@@ -142,7 +157,7 @@ fn decode_modern_jpeg(
     // data is removed because it follows `jpeg_tables`. Similary, `jpeg_tables` ends with a `EOI`
     // (HEX: `0xFFD9`) or __end of image__ marker, this has to be removed as well (last two bytes
     // of `jpeg_tables`).
-    let reader = Cursor::new(buf);
+    let reader = Cursor::new(compressed_buffer);
 
     let jpeg_reader = match jpeg_tables {
         Some(jpeg_tables) => {
@@ -177,5 +192,6 @@ fn decode_modern_jpeg(
     }
 
     let data = decoder.decode()?;
-    Ok(data.into())
+    result_buffer.copy_from_slice(&data);
+    Ok(())
 }

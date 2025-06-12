@@ -159,7 +159,7 @@ pub enum TiffUnsupportedError {
     UnsupportedSampleDepth(u8),
     UnsupportedSampleFormat(Vec<SampleFormat>),
     // UnsupportedColorType(ColorType),
-    UnsupportedBitsPerChannel(u8),
+    UnsupportedBitsPerChannel(u16),
     UnsupportedPlanarConfig(Option<PlanarConfiguration>),
     UnsupportedDataType,
     UnsupportedInterpretation(PhotometricInterpretation),

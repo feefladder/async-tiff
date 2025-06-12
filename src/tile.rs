@@ -5,6 +5,7 @@ use crate::error::AsyncTiffResult;
 use crate::predictor::{fix_endianness, unpredict_float, unpredict_hdiff, PredictorInfo};
 use crate::tiff::tags::{CompressionMethod, PhotometricInterpretation, Predictor};
 use crate::tiff::{TiffError, TiffUnsupportedError};
+use crate::DecodingResult;
 
 /// A TIFF Tile response.
 ///
@@ -65,7 +66,22 @@ impl Tile {
     ///
     /// Decoding is separate from fetching so that sync and async operations do not block the same
     /// runtime.
-    pub fn decode(self, decoder_registry: &DecoderRegistry) -> AsyncTiffResult<Bytes> {
+    pub fn decode(self, decoder_registry: &DecoderRegistry) -> AsyncTiffResult<DecodingResult> {
+        let mut res = DecodingResult::from_predictor_info(self.predictor_info, self.x, self.y)?;
+        self.decode_into(decoder_registry, res.as_mut_u8_buf())?;
+        Ok(res)
+    }
+
+    /// decode this tile into a **properly sized** buffer.
+    ///
+    /// This is an advanced API that _may_ **panic** if the buffer is not
+    /// properly sized, at different places depending on the compression and
+    /// predictor.
+    pub fn decode_into(
+        &self,
+        decoder_registry: &DecoderRegistry,
+        result_buffer: &mut [u8],
+    ) -> AsyncTiffResult<()> {
         let decoder = decoder_registry
             .as_ref()
             .get(&self.compression_method)
@@ -73,23 +89,44 @@ impl Tile {
                 TiffUnsupportedError::UnsupportedCompressionMethod(self.compression_method),
             ))?;
 
-        let decoded_tile = decoder.decode_tile(
-            self.compressed_bytes.clone(),
-            self.photometric_interpretation,
-            self.jpeg_tables.as_deref(),
-        )?;
-
         match self.predictor {
-            Predictor::None => Ok(fix_endianness(
-                decoded_tile,
-                self.predictor_info.endianness(),
-                self.predictor_info.bits_per_sample(),
-            )),
+            Predictor::None => {
+                decoder.decode_tile(
+                    self.compressed_bytes.clone(),
+                    result_buffer,
+                    self.photometric_interpretation,
+                    self.jpeg_tables.as_deref(),
+                )?;
+                fix_endianness(
+                    result_buffer,
+                    self.predictor_info.endianness(),
+                    self.predictor_info.bits_per_sample(),
+                );
+                Ok(())
+            }
             Predictor::Horizontal => {
-                unpredict_hdiff(decoded_tile, &self.predictor_info, self.x as _)
+                decoder.decode_tile(
+                    self.compressed_bytes.clone(),
+                    result_buffer,
+                    self.photometric_interpretation,
+                    self.jpeg_tables.as_deref(),
+                )?;
+                unpredict_hdiff(result_buffer, &self.predictor_info, self.x as _)
             }
             Predictor::FloatingPoint => {
-                unpredict_float(decoded_tile, &self.predictor_info, self.x as _, self.y as _)
+                let mut temp_buf = vec![0u8; result_buffer.len()];
+                decoder.decode_tile(
+                    self.compressed_bytes.clone(),
+                    &mut temp_buf,
+                    self.photometric_interpretation,
+                    self.jpeg_tables.as_deref(),
+                )?;
+                unpredict_float(
+                    &mut temp_buf,
+                    result_buffer,
+                    &self.predictor_info,
+                    self.x as _,
+                )
             }
         }
     }

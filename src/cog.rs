@@ -52,7 +52,7 @@ mod test {
         let ifd = &tiff.ifds[1];
         let tile = ifd.fetch_tile(0, 0, reader.as_ref()).await.unwrap();
         let tile = tile.decode(&Default::default()).unwrap();
-        std::fs::write("img.buf", tile).unwrap();
+        std::fs::write("img.buf", tile.as_u8_buf()).unwrap();
     }
 
     #[ignore = "local file"]
