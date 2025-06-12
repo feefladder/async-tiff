@@ -7,7 +7,7 @@ use std::io::{Cursor, Read};
 use bytes::Bytes;
 use flate2::bufread::ZlibDecoder;
 
-use crate::error::AsyncTiffResult;
+use crate::error::{AsyncTiffResult, AsyncTiffError};
 use crate::tiff::tags::{CompressionMethod, PhotometricInterpretation};
 use crate::tiff::{TiffError, TiffUnsupportedError};
 
@@ -114,11 +114,15 @@ impl Decoder for LZWDecoder {
     ) -> AsyncTiffResult<()> {
         // https://github.com/image-rs/image-tiff/blob/90ae5b8e54356a35e266fb24e969aafbcb26e990/src/decoder/stream.rs#L147
         let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-        let decoded = decoder
-            .decode(&compressed_buffer)
-            .expect("failed to decode LZW data");
-        result_buffer.copy_from_slice(&decoded);
-        Ok(())
+        let buf_res = decoder
+            .decode_bytes(&compressed_buffer, result_buffer);
+        match buf_res.status {
+            Err(e) => Err(AsyncTiffError::External(Box::new(e))),
+            Ok(lzw_status) => match lzw_status {
+                weezl::LzwStatus::Ok | weezl::LzwStatus::Done => Ok(()),
+                weezl::LzwStatus::NoProgress => Err(AsyncTiffError::General("Internal LZW decoder reported no progress".into()))
+            }
+        }
     }
 }
 
@@ -135,6 +139,7 @@ impl Decoder for UncompressedDecoder {
         _jpeg_tables: Option<&[u8]>,
     ) -> AsyncTiffResult<()> {
         assert_eq!(compressed_buffer.len(), result_buffer.len());
+        // we still need to copy into the typed array
         result_buffer.copy_from_slice(&compressed_buffer);
         Ok(())
     }
@@ -192,6 +197,7 @@ fn decode_modern_jpeg(
     }
 
     let data = decoder.decode()?;
+    // jpeg decoder doesn't support decoding into a buffer -> copy
     result_buffer.copy_from_slice(&data);
     Ok(())
 }
