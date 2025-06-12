@@ -7,7 +7,7 @@ use std::io::{Cursor, Read};
 use bytes::Bytes;
 use flate2::bufread::ZlibDecoder;
 
-use crate::error::{AsyncTiffResult, AsyncTiffError};
+use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::tiff::tags::{CompressionMethod, PhotometricInterpretation};
 use crate::tiff::{TiffError, TiffUnsupportedError};
 
@@ -114,14 +114,15 @@ impl Decoder for LZWDecoder {
     ) -> AsyncTiffResult<()> {
         // https://github.com/image-rs/image-tiff/blob/90ae5b8e54356a35e266fb24e969aafbcb26e990/src/decoder/stream.rs#L147
         let mut decoder = weezl::decode::Decoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8);
-        let buf_res = decoder
-            .decode_bytes(&compressed_buffer, result_buffer);
+        let buf_res = decoder.decode_bytes(&compressed_buffer, result_buffer);
         match buf_res.status {
             Err(e) => Err(AsyncTiffError::External(Box::new(e))),
             Ok(lzw_status) => match lzw_status {
                 weezl::LzwStatus::Ok | weezl::LzwStatus::Done => Ok(()),
-                weezl::LzwStatus::NoProgress => Err(AsyncTiffError::General("Internal LZW decoder reported no progress".into()))
-            }
+                weezl::LzwStatus::NoProgress => Err(AsyncTiffError::General(
+                    "Internal LZW decoder reported no progress".into(),
+                )),
+            },
         }
     }
 }
