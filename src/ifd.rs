@@ -402,7 +402,6 @@ impl ImageFileDirectory {
         })
     }
 
-
     /// The Endianness of the file
     pub fn endianness(&self) -> Endianness {
         self.endianness

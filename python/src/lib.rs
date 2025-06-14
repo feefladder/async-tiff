@@ -13,11 +13,11 @@ mod value;
 use pyo3::prelude::*;
 
 use crate::decoder::PyDecoderRegistry;
+use crate::enums::PyEndianness;
 use crate::geo::PyGeoKeyDirectory;
 use crate::ifd::PyImageFileDirectory;
 use crate::thread_pool::PyThreadPool;
 use crate::tiff::PyTIFF;
-use crate::enums::PyEndianness;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
