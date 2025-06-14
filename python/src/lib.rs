@@ -17,6 +17,7 @@ use crate::geo::PyGeoKeyDirectory;
 use crate::ifd::PyImageFileDirectory;
 use crate::thread_pool::PyThreadPool;
 use crate::tiff::PyTIFF;
+use crate::enums::PyEndianness;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -50,6 +51,7 @@ fn _async_tiff(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     check_debug_build(py)?;
 
     m.add_wrapped(wrap_pyfunction!(___version))?;
+    m.add_class::<PyEndianness>()?;
     m.add_class::<PyDecoderRegistry>()?;
     m.add_class::<PyGeoKeyDirectory>()?;
     m.add_class::<PyImageFileDirectory>()?;
