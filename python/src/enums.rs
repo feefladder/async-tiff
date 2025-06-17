@@ -29,7 +29,7 @@ impl<'py> IntoPyObject<'py> for PyEndianness {
     type Output = Bound<'py, PyAny>;
     type Error = PyErr;
 
-    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self:: Error> {
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
         // import the python module
         let enums_mod = py.import(intern!(py, "async_tiff.enums"))?;
         // get our python enum
