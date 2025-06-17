@@ -13,7 +13,6 @@ mod value;
 use pyo3::prelude::*;
 
 use crate::decoder::PyDecoderRegistry;
-use crate::enums::PyEndianness;
 use crate::geo::PyGeoKeyDirectory;
 use crate::ifd::PyImageFileDirectory;
 use crate::thread_pool::PyThreadPool;
@@ -51,7 +50,6 @@ fn _async_tiff(py: Python, m: &Bound<PyModule>) -> PyResult<()> {
     check_debug_build(py)?;
 
     m.add_wrapped(wrap_pyfunction!(___version))?;
-    m.add_class::<PyEndianness>()?;
     m.add_class::<PyDecoderRegistry>()?;
     m.add_class::<PyGeoKeyDirectory>()?;
     m.add_class::<PyImageFileDirectory>()?;

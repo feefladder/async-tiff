@@ -1,5 +1,13 @@
 from enum import IntEnum
 
+class Endianness(StrEnum):
+    """
+    endianness of the underlying tiff file
+    """
+
+    LittleEndian = "LittleEndian"
+    BigEndian = "BigEndian"
+    
 
 class CompressionMethod(IntEnum):
     """

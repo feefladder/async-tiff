@@ -9,28 +9,34 @@ use pyo3::prelude::*;
 use pyo3::types::{PyString, PyTuple};
 use pyo3::{intern, IntoPyObjectExt};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[pyclass(eq, eq_int, name = "Endianness")]
-#[repr(u16)]
-pub(crate) enum PyEndianness {
-    LittleEndian = 0x4949, // b"II"
-    BigEndian = 0x4D4D,    // b"MM"
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PyEndianness(Endianness);
 
 impl From<Endianness> for PyEndianness {
     fn from(value: Endianness) -> Self {
-        match value {
-            Endianness::LittleEndian => Self::LittleEndian,
-            Endianness::BigEndian => Self::BigEndian,
-        }
+        Self(value)
     }
 }
 
 impl From<PyEndianness> for Endianness {
     fn from(value: PyEndianness) -> Self {
-        match value {
-            PyEndianness::LittleEndian => Self::LittleEndian,
-            PyEndianness::BigEndian => Self::BigEndian,
+        value.0
+    }
+}
+
+impl<'py> IntoPyObject<'py> for PyEndianness {
+    type Target = PyAny;
+    type Output = Bound<'py, PyAny>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self:: Error> {
+        // import the python module
+        let enums_mod = py.import(intern!(py, "async_tiff.enums"))?;
+        // get our python enum
+        let enum_cls = enums_mod.getattr(intern!(py, "Endianness"))?;
+        match self.0 {
+            Endianness::LittleEndian => enum_cls.getattr(intern!(py, "LittleEndian")),
+            Endianness::BigEndian => enum_cls.getattr(intern!(py, "BigEndian")),
         }
     }
 }
