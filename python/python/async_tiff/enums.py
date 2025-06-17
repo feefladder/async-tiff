@@ -1,4 +1,13 @@
-from enum import IntEnum, StrEnum
+import sys
+from enum import IntEnum
+
+if sys.version_info >= (3, 11):
+    from enum import StrEnum
+else:
+    from enum import Enum
+    class StrEnum(str, Enum):
+        def __str__(self):
+            return str(self.value)
 
 class Endianness(StrEnum):
     """
