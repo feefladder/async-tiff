@@ -91,8 +91,7 @@ impl fmt::Display for TiffFormatError {
             } => {
                 write!(
                     fmt,
-                    "Decompression returned different amount of bytes than expected: got {}, expected {}.",
-                    actual_bytes, required_bytes
+                    "Decompression returned different amount of bytes than expected: got {actual_bytes}, expected {required_bytes}."
                 )
             }
             InconsistentStripSamples {
@@ -101,37 +100,36 @@ impl fmt::Display for TiffFormatError {
             } => {
                 write!(
                     fmt,
-                    "Inconsistent elements in strip: got {}, expected {}.",
-                    actual_samples, required_samples
+                    "Inconsistent elements in strip: got {actual_samples}, expected {required_samples}."
                 )
             }
-            InvalidDimensions(width, height) => write!(fmt, "Invalid dimensions: {}x{}.", width, height),
+            InvalidDimensions(width, height) => write!(fmt, "Invalid dimensions: {width}x{height}."),
             InvalidTag => write!(fmt, "Image contains invalid tag."),
             InvalidTagValueType(ref tag) => {
-                write!(fmt, "Tag `{:?}` did not have the expected value type.", tag)
+                write!(fmt, "Tag `{tag:?}` did not have the expected value type.")
             }
-            RequiredTagNotFound(ref tag) => write!(fmt, "Required tag `{:?}` not found.", tag),
+            RequiredTagNotFound(ref tag) => write!(fmt, "Required tag `{tag:?}` not found."),
             UnknownPredictor(ref predictor) => {
-                write!(fmt, "Unknown predictor “{}” encountered", predictor)
+                write!(fmt, "Unknown predictor “{predictor}” encountered")
             }
             UnknownPlanarConfiguration(ref planar_config) =>  {
-                write!(fmt, "Unknown planar configuration “{}” encountered", planar_config)
+                write!(fmt, "Unknown planar configuration “{planar_config}” encountered")
             }
-            ByteExpected(ref val) => write!(fmt, "Expected byte, {:?} found.", val),
-            SignedByteExpected(ref val) => write!(fmt, "Expected signed byte, {:?} found.", val),
-            ShortExpected(ref val) => write!(fmt, "Expected short, {:?} found.", val),
-            SignedShortExpected(ref val) => write!(fmt, "Expected signed short, {:?} found.", val),
+            ByteExpected(ref val) => write!(fmt, "Expected byte, {val:?} found."),
+            SignedByteExpected(ref val) => write!(fmt, "Expected signed byte, {val:?} found."),
+            ShortExpected(ref val) => write!(fmt, "Expected short, {val:?} found."),
+            SignedShortExpected(ref val) => write!(fmt, "Expected signed short, {val:?} found."),
             UnsignedIntegerExpected(ref val) => {
-                write!(fmt, "Expected unsigned integer, {:?} found.", val)
+                write!(fmt, "Expected unsigned integer, {val:?} found.")
             }
             SignedIntegerExpected(ref val) => {
-                write!(fmt, "Expected signed integer, {:?} found.", val)
+                write!(fmt, "Expected signed integer, {val:?} found.")
             }
-            Format(ref val) => write!(fmt, "Invalid format: {:?}.", val),
-            RequiredTagEmpty(ref val) => write!(fmt, "Required tag {:?} was empty.", val),
+            Format(ref val) => write!(fmt, "Invalid format: {val:?}."),
+            RequiredTagEmpty(ref val) => write!(fmt, "Required tag {val:?} was empty."),
             StripTileTagConflict => write!(fmt, "File should contain either (StripByteCounts and StripOffsets) or (TileByteCounts and TileOffsets), other combination was found."),
             CycleInOffsets => write!(fmt, "File contained a cycle in the list of IFDs"),
-            JpegDecoder(ref error) => write!(fmt, "{}",  error),
+            JpegDecoder(ref error) => write!(fmt, "{error}"),
             SamplesPerPixelIsZero => write!(fmt, "Samples per pixel is zero"),
         }
     }
@@ -182,12 +180,11 @@ impl fmt::Display for TiffUnsupportedError {
             //     color_type
             // ),
             InconsistentBitsPerSample(ref bits_per_sample) => {
-                write!(fmt, "Inconsistent bits per sample: {:?}.", bits_per_sample)
+                write!(fmt, "Inconsistent bits per sample: {bits_per_sample:?}.")
             }
             InterpretationWithBits(ref photometric_interpretation, ref bits_per_sample) => write!(
                 fmt,
-                "{:?} with {:?} bits per sample is unsupported",
-                photometric_interpretation, bits_per_sample
+                "{photometric_interpretation:?} with {bits_per_sample:?} bits per sample is unsupported"
             ),
             UnknownInterpretation => write!(
                 fmt,
@@ -195,36 +192,35 @@ impl fmt::Display for TiffUnsupportedError {
             ),
             UnknownCompressionMethod => write!(fmt, "Unknown compression method."),
             UnsupportedCompressionMethod(method) => {
-                write!(fmt, "Compression method {:?} is unsupported", method)
+                write!(fmt, "Compression method {method:?} is unsupported")
             }
             UnsupportedPredictor(p) => {
                 write!(fmt, "Predictor {p:?} is unsupported")
             }
             UnsupportedSampleDepth(samples) => {
-                write!(fmt, "{} samples per pixel is unsupported.", samples)
+                write!(fmt, "{samples} samples per pixel is unsupported.")
             }
             UnsupportedSampleFormat(ref formats) => {
-                write!(fmt, "Sample format {:?} is unsupported.", formats)
+                write!(fmt, "Sample format {formats:?} is unsupported.")
             }
             // UnsupportedColorType(color_type) => {
             //     write!(fmt, "Color type {:?} is unsupported", color_type)
             // }
             UnsupportedBitsPerChannel(bits) => {
-                write!(fmt, "{} bits per channel not supported", bits)
+                write!(fmt, "{bits} bits per channel not supported")
             }
             UnsupportedPlanarConfig(config) => {
-                write!(fmt, "Unsupported planar configuration “{:?}”.", config)
+                write!(fmt, "Unsupported planar configuration “{config:?}”.")
             }
             UnsupportedDataType => write!(fmt, "Unsupported data type."),
             UnsupportedInterpretation(interpretation) => {
                 write!(
                     fmt,
-                    "Unsupported photometric interpretation \"{:?}\".",
-                    interpretation
+                    "Unsupported photometric interpretation \"{interpretation:?}\"."
                 )
             }
             UnsupportedJpegFeature(ref unsupported_feature) => {
-                write!(fmt, "Unsupported JPEG feature {:?}", unsupported_feature)
+                write!(fmt, "Unsupported JPEG feature {unsupported_feature:?}")
             }
             MisalignedTileBoundaries => write!(fmt, "Tile rows are not aligned to byte boundaries"),
         }
@@ -254,7 +250,7 @@ impl fmt::Display for UsageError {
             //         expected, actual
             //     )
             // }
-            InvalidChunkIndex(index) => write!(fmt, "Image chunk index ({}) requested.", index),
+            InvalidChunkIndex(index) => write!(fmt, "Image chunk index ({index}) requested."),
             PredictorCompressionMismatch => write!(
                 fmt,
                 "The requested predictor is not compatible with the requested compression"
@@ -271,16 +267,15 @@ impl fmt::Display for UsageError {
 impl fmt::Display for TiffError {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> Result<(), fmt::Error> {
         match *self {
-            TiffError::FormatError(ref e) => write!(fmt, "Format error: {}", e),
+            TiffError::FormatError(ref e) => write!(fmt, "Format error: {e}"),
             TiffError::UnsupportedError(ref f) => write!(
                 fmt,
                 "The Decoder does not support the \
-                 image format `{}`",
-                f
+                 image format `{f}`"
             ),
             TiffError::IoError(ref e) => e.fmt(fmt),
             TiffError::IntSizeError => write!(fmt, "Platform or format size limits exceeded"),
-            TiffError::UsageError(ref e) => write!(fmt, "Usage error: {}", e),
+            TiffError::UsageError(ref e) => write!(fmt, "Usage error: {e}"),
         }
     }
 }
