@@ -11,7 +11,7 @@ static DEFAULT_POOL: GILOnceCell<Arc<ThreadPool>> = GILOnceCell::new();
 pub fn get_default_pool(py: Python<'_>) -> PyResult<Arc<ThreadPool>> {
     let runtime = DEFAULT_POOL.get_or_try_init(py, || {
         let pool = ThreadPoolBuilder::new().build().map_err(|err| {
-            PyValueError::new_err(format!("Could not create rayon threadpool. {}", err))
+            PyValueError::new_err(format!("Could not create rayon threadpool. {err}"))
         })?;
         Ok::<_, PyErr>(Arc::new(pool))
     })?;
@@ -29,7 +29,7 @@ impl PyThreadPool {
             .num_threads(num_threads)
             .build()
             .map_err(|err| {
-                PyValueError::new_err(format!("Could not create rayon threadpool. {}", err))
+                PyValueError::new_err(format!("Could not create rayon threadpool. {err}"))
             })?;
         Ok(Self(Arc::new(pool)))
     }

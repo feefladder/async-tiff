@@ -35,8 +35,7 @@ impl<'py> IntoPyObject<'py> for PyValue {
             Value::Ifd(_val) => Err(PyRuntimeError::new_err("Unsupported value type 'Ifd'")),
             Value::IfdBig(_val) => Err(PyRuntimeError::new_err("Unsupported value type 'IfdBig'")),
             v => Err(PyRuntimeError::new_err(format!(
-                "Unknown value type: {:?}",
-                v
+                "Unknown value type: {v:?}"
             ))),
         }
     }

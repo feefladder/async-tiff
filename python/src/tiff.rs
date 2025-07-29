@@ -65,7 +65,7 @@ impl PyTIFF {
             .ifds()
             .as_ref()
             .get(z)
-            .ok_or_else(|| PyIndexError::new_err(format!("No IFD found for z={}", z)))?
+            .ok_or_else(|| PyIndexError::new_err(format!("No IFD found for z={z}")))?
             // TODO: avoid this clone; add Arc to underlying rust code?
             .clone();
         future_into_py(py, async move {
@@ -91,7 +91,7 @@ impl PyTIFF {
             .ifds()
             .as_ref()
             .get(z)
-            .ok_or_else(|| PyIndexError::new_err(format!("No IFD found for z={}", z)))?
+            .ok_or_else(|| PyIndexError::new_err(format!("No IFD found for z={z}")))?
             // TODO: avoid this clone; add Arc to underlying rust code?
             .clone();
         future_into_py(py, async move {
