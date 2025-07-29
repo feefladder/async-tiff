@@ -1,5 +1,7 @@
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use num_enum::TryFromPrimitive;
@@ -16,6 +18,48 @@ use crate::tiff::{TiffError, Value};
 use crate::tile::Tile;
 
 const DOCUMENT_NAME: u16 = 269;
+
+/// Trait to implement for custom tags, such as Geo, EXIF, OME, etc
+pub trait ExtraTags: ExtraTagsCloneArc + std::any::Any + Debug {
+    /// a list of tags this entry processes
+    /// e.g. for Geo this would be [34735, 34736, 34737]
+    fn tags(&self) -> &'static [Tag];
+    /// process a single tag
+    fn process_tag(&mut self, tag: u16, value: Value) -> AsyncTiffResult<()>;
+}
+
+//
+pub trait ExtraTagsCloneArc {
+    fn clone_arc(&self) -> Arc<dyn ExtraTags>;
+}
+
+impl<T> ExtraTagsCloneArc for T
+where
+    T: 'static + ExtraTags + Clone
+{
+    fn clone_arc(&self) -> Arc<dyn ExtraTags> {
+        Arc::new(self.clone())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExtraTagsRegistry(HashMap<Tag, Arc<dyn ExtraTags>>);
+
+impl ExtraTagsRegistry {
+    pub fn register(&mut self, tags: Arc<dyn ExtraTags>) -> AsyncTiffResult<()> {
+        // check for duplicates
+        for tag in tags.tags() {
+            if self.0.contains_key(tag) {
+                return Err(AsyncTiffError::General(format!("Tag {tag:?} already registered in {self:?}!")));
+            }
+        }
+        // add to self
+        for tag in tags.tags() {
+            self.0.insert(*tag, tags.clone());
+        }
+        Ok(())
+    }
+}
 
 /// An ImageFileDirectory representing Image content
 // The ordering of these tags matches the sorted order in TIFF spec Appendix A
@@ -133,6 +177,8 @@ pub struct ImageFileDirectory {
 
     pub(crate) copyright: Option<String>,
 
+    pub(crate) extra_tags: ExtraTagsRegistry,
+
     // Geospatial tags
     pub(crate) geo_key_directory: Option<GeoKeyDirectory>,
     pub(crate) model_pixel_scale: Option<Vec<f64>>,
@@ -149,6 +195,7 @@ impl ImageFileDirectory {
     pub fn from_tags(
         tag_data: HashMap<Tag, Value>,
         endianness: Endianness,
+        extra_tags_registry: ExtraTagsRegistry
     ) -> AsyncTiffResult<Self> {
         let mut new_subfile_type = None;
         let mut image_width = None;
@@ -398,6 +445,7 @@ impl ImageFileDirectory {
             geo_key_directory,
             model_pixel_scale,
             model_tiepoint,
+            extra_tags: extra_tags_registry,
             other_tags,
         })
     }

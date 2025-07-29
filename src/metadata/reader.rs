@@ -4,6 +4,7 @@ use std::io::Read;
 use bytes::Bytes;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
+use crate::ifd::ExtraTagsRegistry;
 use crate::metadata::fetch::MetadataCursor;
 use crate::metadata::MetadataFetch;
 use crate::reader::Endianness;
@@ -157,6 +158,8 @@ pub struct ImageFileDirectoryReader {
     ifd_entry_byte_size: u64,
     /// The number of bytes that the value for the number of tags takes up.
     tag_count_byte_size: u64,
+    /// Registry for parsing extra tags
+    extra_tags_registry: ExtraTagsRegistry,
 }
 
 impl ImageFileDirectoryReader {
@@ -166,6 +169,7 @@ impl ImageFileDirectoryReader {
         ifd_start_offset: u64,
         bigtiff: bool,
         endianness: Endianness,
+        extra_tags_registry: ExtraTagsRegistry,
     ) -> AsyncTiffResult<Self> {
         let mut cursor = MetadataCursor::new_with_offset(fetch, endianness, ifd_start_offset);
 
@@ -194,6 +198,7 @@ impl ImageFileDirectoryReader {
             tag_count,
             tag_count_byte_size,
             ifd_start_offset,
+            extra_tags_registry,
         })
     }
 
@@ -226,7 +231,7 @@ impl ImageFileDirectoryReader {
             let (tag, value) = self.read_tag(fetch, tag_idx).await?;
             tags.insert(tag, value);
         }
-        ImageFileDirectory::from_tags(tags, self.endianness)
+        ImageFileDirectory::from_tags(tags, self.endianness, self.extra_tags_registry)
     }
 
     /// Finish this reader, reading the byte offset of the next IFD
