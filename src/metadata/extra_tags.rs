@@ -1,6 +1,7 @@
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::tiff::tags::Tag;
 use crate::tiff::Value;
+use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -8,7 +9,7 @@ use std::sync::Arc;
 /// Trait to implement for custom tags, such as Geo, EXIF, OME, etc
 /// your type should also implement `Clone`
 // Send + Sync are required for Python, where `dyn ExtraTags` needs `Send` and `Sync`
-pub trait ExtraTags: ExtraTagsCloneArc + std::any::Any + Debug + Send + Sync {
+pub trait ExtraTags: ExtraTagsBlankets + Any + Debug + Send + Sync {
     /// a list of tags this entry processes
     /// e.g. for Geo this would be [34735, 34736, 34737]
     fn tags(&self) -> &'static [Tag];
@@ -18,16 +19,22 @@ pub trait ExtraTags: ExtraTagsCloneArc + std::any::Any + Debug + Send + Sync {
 
 // we need to do a little dance to do an object-safe deep clone
 // https://stackoverflow.com/a/30353928/14681457
-pub trait ExtraTagsCloneArc {
+// also object-safe type conversions for downcasting
+pub trait ExtraTagsBlankets {
     fn clone_arc(&self) -> Arc<dyn ExtraTags>;
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
-impl<T> ExtraTagsCloneArc for T
+impl<T> ExtraTagsBlankets for T
 where
     T: 'static + ExtraTags + Clone,
 {
     fn clone_arc(&self) -> Arc<dyn ExtraTags> {
         Arc::new(self.clone())
+    }
+
+    fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync> {
+        self
     }
 }
 
