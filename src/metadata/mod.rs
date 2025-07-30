@@ -40,7 +40,7 @@
 //!
 //! // Read all IFDs out of the source.
 //! let ifds = metadata_reader
-//!     .read_all_ifds(&prefetch_reader)
+//!     .read_all_ifds(&prefetch_reader, Default::default())
 //!     .await
 //!     .unwrap();
 //! # })
