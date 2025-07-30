@@ -24,6 +24,10 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
+  # pre-push rust formatting, linting and testing
+  # install these "manually" with `pre-commit install -t pre-push`
+  # otherwise they are ignored
+  # https://pre-commit.com/#confining-hooks-to-run-at-certain-stages
   - repo: local
     hooks:
       - id: rust-fmt
