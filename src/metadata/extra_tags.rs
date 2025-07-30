@@ -4,6 +4,7 @@ use crate::tiff::Value;
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::ops::Index;
 use std::sync::Arc;
 
 /// Trait to implement for custom tags, such as Geo, EXIF, OME, etc
@@ -13,8 +14,8 @@ pub trait ExtraTags: ExtraTagsBlankets + Any + Debug + Send + Sync {
     /// a list of tags this entry processes
     /// e.g. for Geo this would be [34735, 34736, 34737]
     fn tags(&self) -> &'static [Tag];
-    /// process a single tag
-    fn process_tag(&mut self, tag: u16, value: Value) -> AsyncTiffResult<()>;
+    /// process a single tag, using internal mutability if needed
+    fn process_tag(&self, tag: Tag, value: Value) -> AsyncTiffResult<()>;
 }
 
 // we need to do a little dance to do an object-safe deep clone
@@ -47,6 +48,10 @@ impl ExtraTagsRegistry {
     /// Create a new, empty `ExtraTagsRegistry`
     pub fn new() -> Self {
         Self(HashMap::new())
+    }
+    /// checks if we have an entry for this tag
+    pub fn contains(&self, tag: &Tag) -> bool {
+        self.0.contains_key(tag)
     }
     /// Register an ExtraTags so their tags are parsed and stored in the ifd's `extra_tags``
     pub fn register(&mut self, tags: Arc<dyn ExtraTags>) -> AsyncTiffResult<()> {
@@ -91,6 +96,13 @@ impl Default for ExtraTagsRegistry {
     }
 }
 
+impl Index<&Tag> for ExtraTagsRegistry {
+    type Output = Arc<dyn ExtraTags>;
+    fn index(&self, index: &Tag) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,8 +124,8 @@ mod tests {
         }
 
         fn process_tag(
-            &mut self,
-            tag: u16,
+            &self,
+            tag: Tag,
             value: crate::tiff::Value,
         ) -> crate::error::AsyncTiffResult<()> {
             println!("received {tag:?}: {value:?}");

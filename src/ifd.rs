@@ -267,8 +267,13 @@ impl ImageFileDirectory {
                 // Tag::GdalNodata
                 // Tags for which the tiff crate doesn't have a hard-coded enum variant
                 Tag::Unknown(DOCUMENT_NAME) => document_name = Some(value.into_string()?),
-                _ => {
-                    other_tags.insert(tag, value);
+                t => {
+                    if extra_tags_registry.contains(&t) {
+                        extra_tags_registry[&t].process_tag(t, value);
+                    } else {
+                        other_tags.insert(tag, value);
+                    }
+
                 }
             };
             Ok::<_, TiffError>(())
