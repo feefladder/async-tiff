@@ -1,13 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::ops::Range;
-use std::sync::Arc;
 
 use bytes::Bytes;
 use num_enum::TryFromPrimitive;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::geo::{GeoKeyDirectory, GeoKeyTag};
+use crate::metadata::ExtraTagsRegistry;
 use crate::predictor::PredictorInfo;
 use crate::reader::{AsyncFileReader, Endianness};
 use crate::tiff::tags::{
@@ -18,82 +18,6 @@ use crate::tiff::{TiffError, Value};
 use crate::tile::Tile;
 
 const DOCUMENT_NAME: u16 = 269;
-
-/// Trait to implement for custom tags, such as Geo, EXIF, OME, etc
-/// your type should also implement `Clone`
-// Send + Sync are required for Python, where `dyn ExtraTags` needs `Send` and `Sync`
-pub trait ExtraTags: ExtraTagsCloneArc + std::any::Any + Debug + Send + Sync {
-    /// a list of tags this entry processes
-    /// e.g. for Geo this would be [34735, 34736, 34737]
-    fn tags(&self) -> &'static [Tag];
-    /// process a single tag
-    fn process_tag(&mut self, tag: u16, value: Value) -> AsyncTiffResult<()>;
-}
-
-// we need to do a little dance to do an object-safe deep clone
-// https://stackoverflow.com/a/30353928/14681457
-pub trait ExtraTagsCloneArc {
-    fn clone_arc(&self) -> Arc<dyn ExtraTags>;
-}
-
-impl<T> ExtraTagsCloneArc for T
-where
-    T: 'static + ExtraTags + Clone
-{
-    fn clone_arc(&self) -> Arc<dyn ExtraTags> {
-        Arc::new(self.clone())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ExtraTagsRegistry(HashMap<Tag, Arc<dyn ExtraTags>>);
-
-impl ExtraTagsRegistry {
-    /// Create a new, empty `ExtraTagsRegistry`
-    pub fn new() -> Self{
-        Self(HashMap::new())
-    }
-    /// Register an ExtraTags so their tags are parsed and stored in the ifd's `extra_tags``
-    pub fn register(&mut self, tags: Arc<dyn ExtraTags>) -> AsyncTiffResult<()> {
-        // check for duplicates
-        for tag in tags.tags() {
-            if self.0.contains_key(tag) {
-                return Err(AsyncTiffError::General(format!("Tag {tag:?} already registered in {self:?}!")));
-            }
-        }
-        // add to self
-        for tag in tags.tags() {
-            self.0.insert(*tag, tags.clone());
-        }
-        Ok(())
-    }
-
-    /// deep clone so we have different registries per IFD
-    pub(crate) fn deep_clone(&self) -> Self {
-        let mut new_registry = ExtraTagsRegistry::new();
-
-
-        // we need to do some magic, because we can have multiple tags pointing to the same arc
-        let mut seen = HashSet::new();
-        for extra_tags in self.0.values() {
-            // only add if this is the first encountered reference to this arc
-            // (using thin pointer equality: https://stackoverflow.com/a/67114787/14681457 ; https://github.com/rust-lang/rust/issues/46139#issuecomment-346971153)
-            if seen.insert(Arc::as_ptr(extra_tags) as *const ()) {
-                if let Err(e) = new_registry.register(extra_tags.clone_arc()) {
-                    panic!("{e}");
-                }
-            }
-        }
-
-        new_registry
-    }
-}
-
-impl Default for ExtraTagsRegistry {
-    fn default() -> Self {
-        Self::new() // add e.g. geo tags later
-    }
-}
 
 /// An ImageFileDirectory representing Image content
 // The ordering of these tags matches the sorted order in TIFF spec Appendix A
@@ -229,7 +153,7 @@ impl ImageFileDirectory {
     pub fn from_tags(
         tag_data: HashMap<Tag, Value>,
         endianness: Endianness,
-        extra_tags_registry: ExtraTagsRegistry
+        extra_tags_registry: ExtraTagsRegistry,
     ) -> AsyncTiffResult<Self> {
         let mut new_subfile_type = None;
         let mut image_width = None;
