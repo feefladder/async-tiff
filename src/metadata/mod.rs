@@ -58,10 +58,10 @@
 //! fetches the first `N` bytes out of a file.
 //!
 
-mod extra_tags;
+pub mod extra_tags;
 mod fetch;
 mod reader;
 
-pub use extra_tags::{ExtraTags, ExtraTagsRegistry};
+// pub use extra_tags::{ExtraTags, ExtraTagsRegistry};
 pub use fetch::{MetadataFetch, PrefetchBuffer};
 pub use reader::{ImageFileDirectoryReader, TiffMetadataReader};

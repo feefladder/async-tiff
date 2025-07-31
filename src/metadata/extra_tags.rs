@@ -1,3 +1,81 @@
+//! # Register parsers for additional tags
+//!
+//! Simplified example for exif tags parser
+//!
+//!  ```
+//! # use std::sync::{LazyLock, OnceLock, Arc};
+//! # use std::env::current_dir;
+//! # use async_tiff::tiff::{Value, tags::Tag};
+//! # use async_tiff::error::AsyncTiffResult;
+//! # use async_tiff::reader::{ObjectReader, AsyncFileReader};
+//! # use async_tiff::metadata::TiffMetadataReader;
+//! use async_tiff::metadata::extra_tags::{ExtraTags, ExtraTagsRegistry};
+//! # use object_store::local::LocalFileSystem;
+//! // see https://www.media.mit.edu/pia/Research/deepview/exif.html#ExifTags
+//! // or exif spec: https://www.cipa.jp/std/documents/download_e.html?DC-008-Translation-2023-E
+//! // / all tags processed by your extension
+//! pub const EXIF_TAGS: [Tag; 3] = [
+//!     Tag::Unknown(34665), // Exif IFD pointer
+//!     Tag::Unknown(34853), // GPS IFD pointer
+//!     Tag::Unknown(40965), // Interoperability IFD pointer
+//! ];
+//!
+//! // / the struct that stores the data (using interior mutability)
+//! #[derive(Debug, Clone, Default)]
+//! pub struct ExifTags {
+//!     pub exif: OnceLock<u32>,
+//!     pub gps: OnceLock<u32>,
+//!     pub interop: OnceLock<u32>,
+//!     // would also hold e.g. a TiffMetadataReader to read exif IFDs
+//! }
+//!
+//! impl ExtraTags for ExifTags {
+//!     fn tags(&self) -> &'static [Tag] {
+//!          &EXIF_TAGS
+//!     }
+//!
+//!     fn process_tag(&self, tag:Tag, value: Value) -> AsyncTiffResult<()> {
+//!         match tag {
+//!             Tag::Unknown(34665) => self.exif.set(value.into_u32()?).unwrap(),
+//!             Tag::Unknown(34853) => self.gps.set(value.into_u32()?).unwrap(),
+//!             Tag::Unknown(40965) => self.interop.set(value.into_u32()?).unwrap(),
+//!             _ => {}
+//!         }
+//!         Ok(())
+//!     }
+//! }
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     // create an empty registry
+//!     let mut registry = ExtraTagsRegistry::new();
+//!     // register our custom extra tags
+//!     registry.register(Arc::new(ExifTags::default()));
+//!
+//!     let store = Arc::new(LocalFileSystem::new_with_prefix(current_dir().unwrap()).unwrap());
+//!     let path = "tests/sample-exif.tiff";
+//!     let reader =
+//!         Arc::new(ObjectReader::new(store.clone(), path.into())) as Arc<dyn AsyncFileReader>;
+//!     let mut metadata_reader = TiffMetadataReader::try_open(&reader).await.unwrap();
+//!     // get the first ifd
+//!     let ifd = &metadata_reader
+//!         .read_all_ifds(&reader, registry)
+//!         .await
+//!         .unwrap()[0];
+//!
+//!     // access by any of our registered tags
+//!     let exif = ifd.extra_tags()[&EXIF_TAGS[0]]
+//!         .clone()
+//!         .as_any_arc()
+//!         .downcast::<ExifTags>()
+//!         .unwrap();
+//!     assert!(exif.exif.get().is_some());
+//!     assert!(exif.gps.get().is_some());
+//!     // our image doesn't have interop info
+//!     assert!(exif.interop.get().is_none());
+//! }
+//! ```
+
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::tiff::tags::Tag;
 use crate::tiff::Value;
@@ -8,21 +86,105 @@ use std::ops::Index;
 use std::sync::Arc;
 
 /// Trait to implement for custom tags, such as Geo, EXIF, OME, etc
-/// your type should also implement `Clone`
+///
+/// your type should also implement `Clone` for blanket implementations of [`ExtraTagsBlankets`]
+///
+/// ```
+/// # use async_tiff::tiff::{Value, tags::Tag};
+/// # use async_tiff::error::AsyncTiffResult;
+/// use async_tiff::metadata::extra_tags::ExtraTags;
+/// # use std::sync::OnceLock;
+///
+/// pub const EXIF_TAGS: [Tag; 3] = [
+///     Tag::Unknown(34665), // Exif IFD pointer
+///     Tag::Unknown(34853), // GPS IFD pointer
+///     Tag::Unknown(40965), // Interoperability IFD pointer
+/// ];
+///
+/// // / the struct that stores the data (using interior mutability)
+/// #[derive(Debug, Clone, Default)]
+/// pub struct ExifTags {
+///     pub exif: OnceLock<u32>,
+///     pub gps: OnceLock<u32>,
+///     pub interop: OnceLock<u32>,
+///     // would also hold e.g. a TiffMetadataReader to read exif IFDs
+/// }
+///
+/// impl ExtraTags for ExifTags {
+///     fn tags(&self) -> &'static [Tag] {
+///          &EXIF_TAGS
+///     }
+///
+///     fn process_tag(&self, tag:Tag, value: Value) -> AsyncTiffResult<()> {
+///         match tag {
+///             Tag::Unknown(34665) => self.exif.set(value.into_u32()?).unwrap(),
+///             Tag::Unknown(34853) => self.gps.set(value.into_u32()?).unwrap(),
+///             Tag::Unknown(40965) => self.interop.set(value.into_u32()?).unwrap(),
+///             _ => {}
+///         }
+///         Ok(())
+///     }
+/// }
+/// ```
 // Send + Sync are required for Python, where `dyn ExtraTags` needs `Send` and `Sync`
 pub trait ExtraTags: ExtraTagsBlankets + Any + Debug + Send + Sync {
     /// a list of tags this entry processes
+    ///
     /// e.g. for Geo this would be [34735, 34736, 34737]
     fn tags(&self) -> &'static [Tag];
     /// process a single tag, using internal mutability if needed
     fn process_tag(&self, tag: Tag, value: Value) -> AsyncTiffResult<()>;
 }
 
-// we need to do a little dance to do an object-safe deep clone
-// https://stackoverflow.com/a/30353928/14681457
-// also object-safe type conversions for downcasting
+/// Extra trait with blanket implementations for object-safe cloning and casting
+///
+/// Automatically implemented if your type implements [`ExtraTags`] and [`Clone`]
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use async_tiff::tiff::{Value, tags::Tag};
+/// # use async_tiff::error::AsyncTiffResult;
+/// use async_tiff::metadata::extra_tags::ExtraTags;
+/// // derive these
+/// #[derive(Debug, Clone)]
+/// pub struct MyTags;
+///
+/// // custom functionality
+/// impl MyTags {
+///     fn forty_two(&self) -> u32 {42}
+/// }
+///
+/// // implement ExtraTags
+/// impl ExtraTags for MyTags {
+///     fn tags(&self) -> &'static [Tag] {
+///         &[]
+///     }
+///
+///     fn process_tag(&self, _tag:Tag, _value:Value) -> AsyncTiffResult<()> {
+///         Ok(())
+///     }
+/// }
+///
+/// fn main() {
+///     // allows for deep cloning
+///     let my_tags = Arc::new(MyTags) as Arc<dyn ExtraTags>;
+///     let other_my_tags = my_tags.clone_arc();
+///     assert!(Arc::ptr_eq(&my_tags, &my_tags.clone()));
+///     assert!(!Arc::ptr_eq(&my_tags, &other_my_tags));
+///
+///     // and downcasting
+///     let my_tags_concrete = my_tags.as_any_arc().downcast::<MyTags>().unwrap();
+///     assert_eq!(my_tags_concrete.forty_two(), 42);
+/// }
+/// ```
+///
+/// This works since blanket implementations are done on concrete types and only
+/// their signatures (function pointer) will end up in the vtable
+/// <https://stackoverflow.com/a/30353928/14681457>
 pub trait ExtraTagsBlankets {
+    /// deep clone
     fn clone_arc(&self) -> Arc<dyn ExtraTags>;
+    /// convert to any for downcasting
     fn as_any_arc(self: Arc<Self>) -> Arc<dyn Any + Send + Sync>;
 }
 
@@ -40,7 +202,36 @@ where
 }
 
 /// The registry in which extra tags (parsers) are registered
-/// This is passed to TODO
+///
+/// Pass this to [`crate::metadata::TiffMetadataReader`] when reading.
+///
+/// ```
+/// # use async_tiff::reader::{AsyncFileReader, ObjectReader};
+/// # use async_tiff::metadata::TiffMetadataReader;
+/// use async_tiff::metadata::extra_tags::ExtraTagsRegistry;
+/// # use std::sync::Arc;
+/// # use std::env::current_dir;
+/// # use object_store::local::LocalFileSystem;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let registry = ExtraTagsRegistry::default();
+///
+///     let store = Arc::new(LocalFileSystem::new_with_prefix(current_dir().unwrap()).unwrap());
+///     # let path = "tests/sample-exif.tiff";
+///     let reader =
+///         Arc::new(ObjectReader::new(store.clone(), path.into())) as Arc<dyn AsyncFileReader>;
+///     let mut metadata_reader = TiffMetadataReader::try_open(&reader).await.unwrap();
+///     // get first ifd
+///     let ifd = &metadata_reader
+///         .read_all_ifds(&reader, registry)
+///         .await
+///         .unwrap()[0];
+///     // retrieve the registry
+///     println!("{:?}",ifd.extra_tags());
+/// }
+/// ```
+///
 #[derive(Debug, Clone)]
 pub struct ExtraTagsRegistry(HashMap<Tag, Arc<dyn ExtraTags>>);
 

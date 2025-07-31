@@ -4,8 +4,8 @@ use std::io::Read;
 use bytes::Bytes;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
+use crate::metadata::extra_tags::ExtraTagsRegistry;
 use crate::metadata::fetch::MetadataCursor;
-use crate::metadata::ExtraTagsRegistry;
 use crate::metadata::MetadataFetch;
 use crate::reader::Endianness;
 use crate::tiff::tags::{Tag, Type};

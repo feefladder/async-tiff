@@ -7,7 +7,7 @@ use num_enum::TryFromPrimitive;
 
 use crate::error::{AsyncTiffError, AsyncTiffResult};
 use crate::geo::{GeoKeyDirectory, GeoKeyTag};
-use crate::metadata::ExtraTagsRegistry;
+use crate::metadata::extra_tags::ExtraTagsRegistry;
 use crate::predictor::PredictorInfo;
 use crate::reader::{AsyncFileReader, Endianness};
 use crate::tiff::tags::{
@@ -269,11 +269,17 @@ impl ImageFileDirectory {
                 Tag::Unknown(DOCUMENT_NAME) => document_name = Some(value.into_string()?),
                 t => {
                     if extra_tags_registry.contains(&t) {
-                        extra_tags_registry[&t].process_tag(t, value);
+                        extra_tags_registry[&t].process_tag(t, value).map_err(|e| {
+                            if let AsyncTiffError::InternalTIFFError(err) = e {
+                                err
+                            } else {
+                                // TODO fix error handling. This is bad
+                                TiffError::IntSizeError
+                            }
+                        })?;
                     } else {
                         other_tags.insert(tag, value);
                     }
-
                 }
             };
             Ok::<_, TiffError>(())
@@ -643,6 +649,11 @@ impl ImageFileDirectory {
     /// <https://web.archive.org/web/20240329145303/https://www.awaresystems.be/imaging/tiff/tifftags/modeltiepointtag.html>
     pub fn model_tiepoint(&self) -> Option<&[f64]> {
         self.model_tiepoint.as_deref()
+    }
+
+    /// the registry holding extra tags
+    pub fn extra_tags(&self) -> &ExtraTagsRegistry {
+        &self.extra_tags
     }
 
     /// Tags for which the tiff crate doesn't have a hard-coded enum variant.
