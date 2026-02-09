@@ -184,6 +184,22 @@ pub enum Type(u16) {
 }
 }
 
+impl Type {
+    pub(crate) fn size(&self) -> u64 {
+        match self {
+            Type::BYTE | Type::SBYTE | Type::ASCII | Type::UNDEFINED => 1,
+            Type::SHORT | Type::SSHORT => 2,
+            Type::LONG | Type::SLONG | Type::FLOAT | Type::IFD => 4,
+            Type::LONG8
+            | Type::SLONG8
+            | Type::DOUBLE
+            | Type::RATIONAL
+            | Type::SRATIONAL
+            | Type::IFD8 => 8,
+        }
+    }
+}
+
 tags! {
 /// Known compression methods.
 ///

@@ -221,6 +221,41 @@ impl ImageFileDirectoryReader {
         Ok((tag_name, tag_value))
     }
 
+    /// Manually peek at the tag with the specified index
+    ///
+    /// Panics if the tag index is out of range of the tag count.
+    ///
+    /// This can be useful if you need to determine specialized caching, such as
+    /// on non-cog tiffs.
+    pub async fn peek_tag<F: MetadataFetch>(
+        &self,
+        fetch: &F,
+        tag_idx: u64,
+    ) -> AsyncTiffResult<(Tag, Type, u64, Option<u64>)> {
+        assert!(tag_idx < self.tag_count);
+        let tag_offset = self.tag_offset(tag_idx);
+        // This is what happens inside read_tag
+        let mut cursor = MetadataCursor::new_with_offset(fetch, self.endianness, tag_offset);
+        let tag_name = Tag::from_u16_exhaustive(cursor.read_u16().await?);
+        let tag_type = Type::from_u16(cursor.read_u16().await?)
+            .ok_or(AsyncTiffError::General("Unrecognized tag type".into()))?;
+        let count = if self.bigtiff {
+            cursor.read_u64().await?
+        } else {
+            cursor.read_u32().await?.into()
+        };
+        // this is inside read_tag_value
+        let tag_value_byte_size = tag_type.size() * count;
+        let value_offset = if self.bigtiff && tag_value_byte_size > 8 {
+            Some(cursor.read_u64().await?)
+        } else if !self.bigtiff && tag_value_byte_size > 4 {
+            Some(cursor.read_u32().await?.into())
+        } else {
+            None
+        };
+        Ok((tag_name, tag_type, count, value_offset))
+    }
+
     /// Read all tags out of this IFD.
     ///
     /// Keep in mind that you'll still need to call [`finish`][Self::finish] to get the byte offset
@@ -310,17 +345,7 @@ async fn read_tag_value<F: MetadataFetch>(
         return Ok(TagValue::List(vec![]));
     }
 
-    let tag_size = match tag_type {
-        Type::BYTE | Type::SBYTE | Type::ASCII | Type::UNDEFINED => 1,
-        Type::SHORT | Type::SSHORT => 2,
-        Type::LONG | Type::SLONG | Type::FLOAT | Type::IFD => 4,
-        Type::LONG8
-        | Type::SLONG8
-        | Type::DOUBLE
-        | Type::RATIONAL
-        | Type::SRATIONAL
-        | Type::IFD8 => 8,
-    };
+    let tag_size = tag_type.size();
 
     let value_byte_length = count.checked_mul(tag_size).unwrap();
 
